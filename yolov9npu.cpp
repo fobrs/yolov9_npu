@@ -846,7 +846,7 @@ void Sample::Render()
 
         const wchar_t* mainLegend = m_ctrlConnected ?
             L"[View] Exit   [X] Play/Pause"
-            : L"ESC - Exit     ENTER - Play/Pause";
+            : L"ESC - Exit     ENTER - Play/Pause   Mouse Context Menu - Open new video  (Shift) < or (Shift) > - back- forward";
         SimpleMath::Vector2 mainLegendSize = m_legendFont->MeasureString(mainLegend);
         auto mainLegendPos = SimpleMath::Vector2(xCenter - mainLegendSize.x / 2, static_cast<float>(safe.bottom) - m_legendFont->GetLineSpacing());
 
