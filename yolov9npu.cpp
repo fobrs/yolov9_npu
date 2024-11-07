@@ -34,9 +34,8 @@ namespace
         XMFLOAT2 texcoord;
     };
 
-
-
-
+    int colors[] = { 0xf0fafa, 0x3588d1, 0x4ad59b, 0x399283, 0x97f989, 0x57b230, 0xd8e9b2, 0xff1c5d, 0xf1bb99, 0xf7794f, 0x987d7b, 0xf4f961, 0x1dfee1, 0x9382e9, 0xc052e4, 0xf3c5fa, 0xd6709b, 0xfe16f4, 0x34f50e, 0xab7b05, 0xfbbd13 };
+ 
     std::vector<uint8_t> LoadBGRAImage(const wchar_t* filename, uint32_t& width, uint32_t& height)
     {
         ComPtr<IWICImagingFactory> wicFactory;
@@ -972,47 +971,50 @@ void Sample::Render()
                 // Draw bounding box outlines
                 m_lineEffect->Apply(commandList);
                 m_lineBatch->Begin(commandList);
-
+                float dx = 5.0f;
                 for (auto& pred : m_preds)
                 {
                     m_lineEffect->SetAlpha(0.75f /*pred.score / 5.0*/);
-                    float dx = 5.0f;
+                   
                     //DirectX::XMVECTORF32 White = { { { 0.980392158f, 0.980392158f, 0.980392158f, 1.0f} } }; // #fafafa
-                    DirectX::XMVECTORF32 White = { { { .0f, 0.980392158f, .0f, 1.0f} } }; // #fafafa
+                    //DirectX::XMVECTORF32 White = { { { .0f, 0.980392158f, .0f, 1.0f} } }; // #fafafa
+                    int col = colors[pred.predictedClass % 20];
+                    DirectX::XMVECTORF32 White = { { { (col >> 16) / 255.0f, ((col >> 8) & 0xff) / 255.0f, (col&0xff)/255.0f, 1.0f} } }; // #fafafa
+                    for (int i = 0; i < 2; i++)
                     {
-                        VertexPositionColor upperLeft(SimpleMath::Vector3(pred.xmin, pred.ymin, 0.f), White);
-                        VertexPositionColor upperRight(SimpleMath::Vector3(pred.xmax, pred.ymin, 0.f), White);
-                        VertexPositionColor lowerRight(SimpleMath::Vector3(pred.xmax, pred.ymin + dx, 0.f), White);
-                        VertexPositionColor lowerLeft(SimpleMath::Vector3(pred.xmin, pred.ymin + dx, 0.f), White);
-                        m_lineBatch->DrawQuad(upperLeft, upperRight, lowerRight, lowerLeft);
+                        DirectX::XMVECTORF32 White = { { { (col >> 16) / 255.0f, ((col >> 8) & 0xff) / 255.0f, (col & 0xff) / 255.0f, 1.0f} } }; // #fafafa
+                        if (i == 1)
+                            White = { { { (col >> 16) / 255.0f, ((col >> 8) & 0xff) / 255.0f, (col & 0xff) / 255.0f, 1.0f} } }; // #fafafa
+                        {
+                            VertexPositionColor upperLeft(SimpleMath::Vector3(pred.xmin, pred.ymin, 0.f), White);
+                            VertexPositionColor upperRight(SimpleMath::Vector3(pred.xmax, pred.ymin, 0.f), White);
+                            VertexPositionColor lowerRight(SimpleMath::Vector3(pred.xmax, pred.ymin + 5 * dx, 0.f), White);
+                            VertexPositionColor lowerLeft(SimpleMath::Vector3(pred.xmin, pred.ymin + 5 * dx, 0.f), White);
+                            m_lineBatch->DrawQuad(upperLeft, upperRight, lowerRight, lowerLeft);
+                        }
 
-                    }
+                        {
+                            VertexPositionColor upperLeft(SimpleMath::Vector3(pred.xmin, pred.ymin + dx, 0.f), White);
+                            VertexPositionColor upperRight(SimpleMath::Vector3(pred.xmin + dx, pred.ymin + dx, 0.f), White);
+                            VertexPositionColor lowerRight(SimpleMath::Vector3(pred.xmin + dx, pred.ymax - dx, 0.f), White);
+                            VertexPositionColor lowerLeft(SimpleMath::Vector3(pred.xmin, pred.ymax - dx, 0.f), White);
+                            m_lineBatch->DrawQuad(upperLeft, upperRight, lowerRight, lowerLeft);
+                        }
+                        {
 
-                    {
-                        VertexPositionColor upperLeft(SimpleMath::Vector3(pred.xmin, pred.ymin+dx, 0.f), White);
-                        VertexPositionColor upperRight(SimpleMath::Vector3(pred.xmin+dx, pred.ymin+dx, 0.f), White);
-                        VertexPositionColor lowerRight(SimpleMath::Vector3(pred.xmin+dx, pred.ymax - dx, 0.f), White);
-                        VertexPositionColor lowerLeft(SimpleMath::Vector3(pred.xmin, pred.ymax - dx, 0.f), White);
-                        m_lineBatch->DrawQuad(upperLeft, upperRight, lowerRight, lowerLeft);
-                    }
-
-                    {
-
-                        VertexPositionColor upperLeft(SimpleMath::Vector3(pred.xmin, pred.ymax-dx, 0.f), White);
-                        VertexPositionColor upperRight(SimpleMath::Vector3(pred.xmax-dx, pred.ymax-dx, 0.f), White);
-                        VertexPositionColor lowerRight(SimpleMath::Vector3(pred.xmax-dx, pred.ymax, 0.f), White);
-                        VertexPositionColor lowerLeft(SimpleMath::Vector3(pred.xmin, pred.ymax, 0.f), White);
-                      
-                        m_lineBatch->DrawQuad(upperLeft, upperRight, lowerRight, lowerLeft);
-                    }
-
-                    {
-                        VertexPositionColor upperLeft(SimpleMath::Vector3(pred.xmax-dx, pred.ymin+dx, 0.f), White);
-                        VertexPositionColor upperRight(SimpleMath::Vector3(pred.xmax, pred.ymin+dx, 0.f), White);
-                        VertexPositionColor lowerRight(SimpleMath::Vector3(pred.xmax, pred.ymax, 0.f), White);
-                        VertexPositionColor lowerLeft(SimpleMath::Vector3(pred.xmax-dx, pred.ymax, 0.f), White);
-
-                        m_lineBatch->DrawQuad(upperLeft, upperRight, lowerRight, lowerLeft);
+                            VertexPositionColor upperLeft(SimpleMath::Vector3(pred.xmin, pred.ymax - dx, 0.f), White);
+                            VertexPositionColor upperRight(SimpleMath::Vector3(pred.xmax - dx, pred.ymax - dx, 0.f), White);
+                            VertexPositionColor lowerRight(SimpleMath::Vector3(pred.xmax - dx, pred.ymax, 0.f), White);
+                            VertexPositionColor lowerLeft(SimpleMath::Vector3(pred.xmin, pred.ymax, 0.f), White);
+                            m_lineBatch->DrawQuad(upperLeft, upperRight, lowerRight, lowerLeft);
+                        }
+                        {
+                            VertexPositionColor upperLeft(SimpleMath::Vector3(pred.xmax - dx, pred.ymin + dx, 0.f), White);
+                            VertexPositionColor upperRight(SimpleMath::Vector3(pred.xmax, pred.ymin + dx, 0.f), White);
+                            VertexPositionColor lowerRight(SimpleMath::Vector3(pred.xmax, pred.ymax, 0.f), White);
+                            VertexPositionColor lowerLeft(SimpleMath::Vector3(pred.xmax - dx, pred.ymax, 0.f), White);
+                            m_lineBatch->DrawQuad(upperLeft, upperRight, lowerRight, lowerLeft);
+                        }
                     }
 
                     /*
@@ -1042,9 +1044,9 @@ void Sample::Render()
 
                     // Render a drop shadow by drawing the text twice with a slight offset.
                     DX::DrawControllerString(m_spriteBatch.get(), m_legendFont.get(), m_ctrlFont.get(),
-                        classTextW.c_str(), SimpleMath::Vector2(pred.xmin, pred.ymin) + SimpleMath::Vector2(2.f, 2.f), SimpleMath::Vector4(0.0f, 0.0f, 0.0f, 0.25f));
+                        classTextW.c_str(), SimpleMath::Vector2(pred.xmin, pred.ymin - 1.5f*dx) + SimpleMath::Vector2(2.f, 2.f), SimpleMath::Vector4(0.0f, 0.0f, 0.0f, 0.25f));
                     DX::DrawControllerString(m_spriteBatch.get(), m_legendFont.get(), m_ctrlFont.get(),
-                        classTextW.c_str(), SimpleMath::Vector2(pred.xmin, pred.ymin), ATG::Colors::White);
+                        classTextW.c_str(), SimpleMath::Vector2(pred.xmin, pred.ymin - 1.5f * dx), ATG::Colors::DarkGrey);
                 }
                 m_spriteBatch->End();
 
