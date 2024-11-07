@@ -21,7 +21,7 @@ YOLOv9 is an object detection model capable of recognizing up to 80 different cl
 
 This sample requires an external download of the ONNX YOLOv9 model, which are roughly 250MB large. The .vcxproj file is configured to download the file automatically, but it can also be downloaded manually here:
 * https://drive.usercontent.google.com/download?id=1Yzu-vlH0mw2Jz8yBkkh12xuoDEDesDhN
-* The model **Model_Yolo_v9c_f16.onnx** is created by:
+* The model **Model_Yolo_v9c_f16.onnx** is quantized for the Hexagon NPU by:
 * https://github.com/DakeQQ/YOLO-Depth-Estimation-for-Android
 
 The file should be placed in a "Data" subdirectory. e.g.
