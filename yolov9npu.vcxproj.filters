@@ -125,12 +125,6 @@
     <FxCompile Include="Assets\PixelShader.hlsl">
       <Filter>Assets</Filter>
     </FxCompile>
-    <FxCompile Include="Assets\PixelShaderD3D11.hlsl">
-      <Filter>Assets</Filter>
-    </FxCompile>
-    <FxCompile Include="Assets\VertexShaderD3D11.hlsl">
-      <Filter>Assets</Filter>
-    </FxCompile>
   </ItemGroup>
   <ItemGroup>
     <None Include="Readme.md" />

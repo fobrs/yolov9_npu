@@ -603,6 +603,15 @@ bool Sample::Initialize(HWND window, int width, int height)
         m_commandAllocator.GetAddressOf(), 
         m_commandList.GetAddressOf());
 
+    // Add the DML execution provider to ORT using the DML Device and D3D12 Command Queue created above.
+    if (!m_dmlDevice)
+    {
+        MessageBox(0, L"No NPU device found\n", L"Error", MB_OK);
+        ExitProcess(1);
+        return false;
+    }
+
+
     InitializeDirectMLResources();
 
     m_deviceResources->CreateDeviceResources();  	

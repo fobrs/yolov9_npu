@@ -22,7 +22,7 @@ struct Pixel
 Texture2D txDiffuse : register(t0);
 SamplerState samLinear : register(s0);
 
-Pixel PS( Interpolants In )
+Pixel main( Interpolants In )
 {
     Pixel Out;
     Out.color = txDiffuse.Sample(samLinear, In.texcoord);
