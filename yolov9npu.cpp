@@ -19,7 +19,7 @@
 #include "ScreenGrab.h"
 #include "bilinear_transform.h"
 
-double threshold = .45;
+double threshold = .40;
 
 //const wchar_t* c_videoPath = L"https://bigroses.net/video/yankees_horror_inning.mp4";
 //const wchar_t* c_videoPath = L"\\\\Diskstation3\\video\\movie\\Jurassic.World.Dominion.2022.720p.BluRay.x264.AAC-[YTS.MX].mp4";
@@ -996,19 +996,61 @@ void Sample::Render()
 
                 for (auto& pred : m_preds)
                 {
-                    DirectX::XMVECTORF32 White = { { { 0.980392158f, 0.980392158f, 0.980392158f, 1.0f} } }; // #fafafa
-                    VertexPositionColor upperLeft(SimpleMath::Vector3(pred.xmin, pred.ymin, 0.f), White);
-                    VertexPositionColor lowerLeft(SimpleMath::Vector3(pred.xmin, pred.ymax, 0.f), White);
-                    VertexPositionColor upperRight(SimpleMath::Vector3(pred.xmax, pred.ymin, 0.f), White);
-                    VertexPositionColor lowerRight(SimpleMath::Vector3(pred.xmax, pred.ymax, 0.f), White);
-                    m_lineEffect->SetAlpha(0.15 /*pred.score / 5.0*/);
+                    m_lineEffect->SetAlpha(0.75f /*pred.score / 5.0*/);
+                    float dx = 5.0f;
+                    //DirectX::XMVECTORF32 White = { { { 0.980392158f, 0.980392158f, 0.980392158f, 1.0f} } }; // #fafafa
+                    DirectX::XMVECTORF32 White = { { { .0f, 0.980392158f, .0f, 1.0f} } }; // #fafafa
+                    {
+                        VertexPositionColor upperLeft(SimpleMath::Vector3(pred.xmin, pred.ymin, 0.f), White);
+                        VertexPositionColor upperRight(SimpleMath::Vector3(pred.xmax, pred.ymin, 0.f), White);
+                        VertexPositionColor lowerRight(SimpleMath::Vector3(pred.xmax, pred.ymin + dx, 0.f), White);
+                        VertexPositionColor lowerLeft(SimpleMath::Vector3(pred.xmin, pred.ymin + dx, 0.f), White);
+                        m_lineBatch->DrawQuad(upperLeft, upperRight, lowerRight, lowerLeft);
 
+                    }
 
+                    {
+                        VertexPositionColor upperLeft(SimpleMath::Vector3(pred.xmin, pred.ymin+dx, 0.f), White);
+                        VertexPositionColor upperRight(SimpleMath::Vector3(pred.xmin+dx, pred.ymin+dx, 0.f), White);
+                        VertexPositionColor lowerRight(SimpleMath::Vector3(pred.xmin+dx, pred.ymax - dx, 0.f), White);
+                        VertexPositionColor lowerLeft(SimpleMath::Vector3(pred.xmin, pred.ymax - dx, 0.f), White);
+                        m_lineBatch->DrawQuad(upperLeft, upperRight, lowerRight, lowerLeft);
+                    }
+
+                    {
+
+                        VertexPositionColor upperLeft(SimpleMath::Vector3(pred.xmin, pred.ymax-dx, 0.f), White);
+                        VertexPositionColor upperRight(SimpleMath::Vector3(pred.xmax-dx, pred.ymax-dx, 0.f), White);
+                        VertexPositionColor lowerRight(SimpleMath::Vector3(pred.xmax-dx, pred.ymax, 0.f), White);
+                        VertexPositionColor lowerLeft(SimpleMath::Vector3(pred.xmin, pred.ymax, 0.f), White);
+                      
+                        m_lineBatch->DrawQuad(upperLeft, upperRight, lowerRight, lowerLeft);
+                    }
+
+                    {
+                        VertexPositionColor upperLeft(SimpleMath::Vector3(pred.xmax-dx, pred.ymin+dx, 0.f), White);
+                        VertexPositionColor upperRight(SimpleMath::Vector3(pred.xmax, pred.ymin+dx, 0.f), White);
+                        VertexPositionColor lowerRight(SimpleMath::Vector3(pred.xmax, pred.ymax, 0.f), White);
+                        VertexPositionColor lowerLeft(SimpleMath::Vector3(pred.xmax-dx, pred.ymax, 0.f), White);
+
+                        m_lineBatch->DrawQuad(upperLeft, upperRight, lowerRight, lowerLeft);
+                    }
+
+                    /*
+                       VertexPositionColor upperLeft(SimpleMath::Vector3(pred.xmin, pred.ymin, 0.f), White);
+                        VertexPositionColor upperRight(SimpleMath::Vector3(pred.xmax, pred.ymin, 0.f), White);
+                        VertexPositionColor lowerLeft(SimpleMath::Vector3(pred.xmin, pred.ymax, 0.f), White);
+                        VertexPositionColor lowerRight(SimpleMath::Vector3(pred.xmax, pred.ymax, 0.f), White);
+                        m_lineBatch->DrawQuad(upperLeft, upperRight, lowerRight, lowerLeft);
+                     */
                     //m_lineBatch->DrawLine(upperLeft, upperRight);
                     //m_lineBatch->DrawLine(upperRight, lowerRight);
                     //m_lineBatch->DrawLine(lowerRight, lowerLeft);
                     //m_lineBatch->DrawLine(lowerLeft, upperLeft);
-                    m_lineBatch->DrawQuad(upperLeft, upperRight, lowerRight, lowerLeft);
+
+
+
+                    
                 }
                 m_lineBatch->End();
 
