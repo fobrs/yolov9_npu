@@ -93,18 +93,6 @@
   </ItemGroup>
   <ItemGroup>
     <None Include="Readme.md" />
-    <None Include="Media\Fonts\XboxOneControllerLegendSmall.spritefont">
-      <Filter>Assets</Filter>
-    </None>
-    <None Include="Media\Fonts\SegoeUI_18.spritefont">
-      <Filter>Assets</Filter>
-    </None>
-    <None Include="Media\Fonts\SegoeUI_30.spritefont">
-      <Filter>Assets</Filter>
-    </None>
-    <None Include="Media\Fonts\SegoeUI_30_Bold.spritefont">
-      <Filter>Assets</Filter>
-    </None>
     <None Include="packages.config" />
   </ItemGroup>
   <ItemGroup>
@@ -112,6 +100,18 @@
       <Filter>Resource Files</Filter>
     </CopyFileToFolders>
     <CopyFileToFolders Include="Assets\grca-grand-canyon-association-park-store_1280x720.mp4" />
+    <CopyFileToFolders Include="Media\Fonts\SegoeUI_18.spritefont">
+      <Filter>Assets</Filter>
+    </CopyFileToFolders>
+    <CopyFileToFolders Include="Media\Fonts\SegoeUI_30.spritefont">
+      <Filter>Assets</Filter>
+    </CopyFileToFolders>
+    <CopyFileToFolders Include="Media\Fonts\SegoeUI_30_Bold.spritefont">
+      <Filter>Assets</Filter>
+    </CopyFileToFolders>
+    <CopyFileToFolders Include="Media\Fonts\XboxOneControllerLegendSmall.spritefont">
+      <Filter>Assets</Filter>
+    </CopyFileToFolders>
   </ItemGroup>
   <ItemGroup>
     <Natvis Include="$(MSBuildThisFileDirectory)..\..\natvis\wil.natvis" />

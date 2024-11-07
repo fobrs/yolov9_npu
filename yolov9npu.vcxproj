@@ -412,10 +412,50 @@ copy $(ProjectDir)data\. $(OutDir)data</Command>
     </ProjectReference>
   </ItemGroup>
   <ItemGroup>
-    <None Include="Media\Fonts\SegoeUI_18.spritefont" />
-    <None Include="Media\Fonts\SegoeUI_30.spritefont" />
-    <None Include="Media\Fonts\SegoeUI_30_Bold.spritefont" />
-    <None Include="Media\Fonts\XboxOneControllerLegendSmall.spritefont" />
+    <CopyFileToFolders Include="Media\Fonts\SegoeUI_18.spritefont">
+      <FileType>Document</FileType>
+      <DestinationFolders Condition="'$(Configuration)|$(Platform)'=='Debug|Win32'">$(OutDir)\Assets</DestinationFolders>
+      <DestinationFolders Condition="'$(Configuration)|$(Platform)'=='Release|Win32'">$(OutDir)\Assets</DestinationFolders>
+      <DestinationFolders Condition="'$(Configuration)|$(Platform)'=='Debug|ARM64'">$(OutDir)\Assets</DestinationFolders>
+      <DestinationFolders Condition="'$(Configuration)|$(Platform)'=='Release|ARM64'">$(OutDir)\Assets</DestinationFolders>
+      <DestinationFolders Condition="'$(Configuration)|$(Platform)'=='Debug|ARM'">$(OutDir)\Assets</DestinationFolders>
+      <DestinationFolders Condition="'$(Configuration)|$(Platform)'=='Release|ARM'">$(OutDir)\Assets</DestinationFolders>
+      <DestinationFolders Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">$(OutDir)\Assets</DestinationFolders>
+      <DestinationFolders Condition="'$(Configuration)|$(Platform)'=='Release|x64'">$(OutDir)\Assets</DestinationFolders>
+    </CopyFileToFolders>
+    <CopyFileToFolders Include="Media\Fonts\SegoeUI_30.spritefont">
+      <FileType>Document</FileType>
+      <DestinationFolders Condition="'$(Configuration)|$(Platform)'=='Debug|Win32'">$(OutDir)\Assets</DestinationFolders>
+      <DestinationFolders Condition="'$(Configuration)|$(Platform)'=='Release|Win32'">$(OutDir)\Assets</DestinationFolders>
+      <DestinationFolders Condition="'$(Configuration)|$(Platform)'=='Debug|ARM64'">$(OutDir)\Assets</DestinationFolders>
+      <DestinationFolders Condition="'$(Configuration)|$(Platform)'=='Release|ARM64'">$(OutDir)\Assets</DestinationFolders>
+      <DestinationFolders Condition="'$(Configuration)|$(Platform)'=='Debug|ARM'">$(OutDir)\Assets</DestinationFolders>
+      <DestinationFolders Condition="'$(Configuration)|$(Platform)'=='Release|ARM'">$(OutDir)\Assets</DestinationFolders>
+      <DestinationFolders Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">$(OutDir)\Assets</DestinationFolders>
+      <DestinationFolders Condition="'$(Configuration)|$(Platform)'=='Release|x64'">$(OutDir)\Assets</DestinationFolders>
+    </CopyFileToFolders>
+    <CopyFileToFolders Include="Media\Fonts\SegoeUI_30_Bold.spritefont">
+      <FileType>Document</FileType>
+      <DestinationFolders Condition="'$(Configuration)|$(Platform)'=='Debug|Win32'">$(OutDir)\Assets</DestinationFolders>
+      <DestinationFolders Condition="'$(Configuration)|$(Platform)'=='Release|Win32'">$(OutDir)\Assets</DestinationFolders>
+      <DestinationFolders Condition="'$(Configuration)|$(Platform)'=='Debug|ARM64'">$(OutDir)\Assets</DestinationFolders>
+      <DestinationFolders Condition="'$(Configuration)|$(Platform)'=='Release|ARM64'">$(OutDir)\Assets</DestinationFolders>
+      <DestinationFolders Condition="'$(Configuration)|$(Platform)'=='Debug|ARM'">$(OutDir)\Assets</DestinationFolders>
+      <DestinationFolders Condition="'$(Configuration)|$(Platform)'=='Release|ARM'">$(OutDir)\Assets</DestinationFolders>
+      <DestinationFolders Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">$(OutDir)\Assets</DestinationFolders>
+      <DestinationFolders Condition="'$(Configuration)|$(Platform)'=='Release|x64'">$(OutDir)\Assets</DestinationFolders>
+    </CopyFileToFolders>
+    <CopyFileToFolders Include="Media\Fonts\XboxOneControllerLegendSmall.spritefont">
+      <FileType>Document</FileType>
+      <DestinationFolders Condition="'$(Configuration)|$(Platform)'=='Debug|Win32'">$(OutDir)\Assets</DestinationFolders>
+      <DestinationFolders Condition="'$(Configuration)|$(Platform)'=='Release|Win32'">$(OutDir)\Assets</DestinationFolders>
+      <DestinationFolders Condition="'$(Configuration)|$(Platform)'=='Debug|ARM64'">$(OutDir)\Assets</DestinationFolders>
+      <DestinationFolders Condition="'$(Configuration)|$(Platform)'=='Release|ARM64'">$(OutDir)\Assets</DestinationFolders>
+      <DestinationFolders Condition="'$(Configuration)|$(Platform)'=='Debug|ARM'">$(OutDir)\Assets</DestinationFolders>
+      <DestinationFolders Condition="'$(Configuration)|$(Platform)'=='Release|ARM'">$(OutDir)\Assets</DestinationFolders>
+      <DestinationFolders Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">$(OutDir)\Assets</DestinationFolders>
+      <DestinationFolders Condition="'$(Configuration)|$(Platform)'=='Release|x64'">$(OutDir)\Assets</DestinationFolders>
+    </CopyFileToFolders>
     <None Include="packages.config" />
     <None Include="Readme.md" />
   </ItemGroup>
