@@ -30,7 +30,7 @@ The file should be placed in a "Data" subdirectory. e.g.
 
 ## Power usage and performance
 
-This sample demonstrates real time perfromance on a Snapdragon X Elite Dev Box. Compared to the orihginal YOLOv4 DirectML Sample running on the GPU, this implementation runs more than twice as fast using less than half the power (15W compated to 40W on the GPU)
+This sample demonstrates real time perfromance on a Snapdragon X Elite Dev Box. Compared to the original [YOLOv4](https://github.com/microsoft/DirectML/tree/master/Samples/yolov4) DirectML Sample running on the GPU, this implementation runs more than twice as fast using less than half the power (15W compated to 40W on the GPU)
 
 ## External links
 
