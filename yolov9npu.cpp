@@ -611,10 +611,10 @@ bool Sample::Initialize(HWND window, int width, int height)
     m_deviceResources->CreateWindowSizeDependentResources();
     CreateWindowSizeDependentResources();
 
-    m_pResizer = std::make_unique<Resizer>();
-    SIZE targetSize = { YoloV4Constants::t_inputWidth, YoloV4Constants::t_inputHeight };
-    m_pResizer->InitDx();
-    m_pResizer->Prepare(targetSize);
+    //m_pResizer = std::make_unique<Resizer>();
+    //SIZE targetSize = { YoloV4Constants::t_inputWidth, YoloV4Constants::t_inputHeight };
+    //m_pResizer->InitDx();
+    //m_pResizer->Prepare(targetSize);
 
     // Add the DML execution provider to ORT using the DML Device and D3D12 Command Queue created above.
     if (!m_dmlDevice)

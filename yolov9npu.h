@@ -8,7 +8,7 @@
 #include "DeviceResources.h"
 #include "StepTimer.h"
 #include "MediaEnginePlayer.h"
-#include "Resizer.h"
+//#include "Resizer.h"
 
 
 using UniqueNativePtr = std::unique_ptr<void, void (*)(void*)>;
@@ -328,7 +328,7 @@ private:
     ComPtr<ID3D12CommandAllocator>                  m_commandAllocator;
     ComPtr<ID3D12GraphicsCommandList>               m_commandList;
 
-    std::unique_ptr<Resizer>                        m_pResizer;
+    //std::unique_ptr<Resizer>                        m_pResizer;
 
     // Shared Resources
     std::unique_ptr<DirectX::DescriptorHeap>        m_dmlDescriptorHeap;
