@@ -121,4 +121,12 @@
       <Filter>ATG Tool Kit</Filter>
     </Manifest>
   </ItemGroup>
+  <ItemGroup>
+    <FxCompile Include="Assets\PixelShader.hlsl">
+      <Filter>Assets</Filter>
+    </FxCompile>
+    <FxCompile Include="Assets\VertexShader.hlsl">
+      <Filter>Assets</Filter>
+    </FxCompile>
+  </ItemGroup>
 </Project>
