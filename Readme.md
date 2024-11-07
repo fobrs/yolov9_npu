@@ -9,7 +9,7 @@ name: DirectML YOLOv9 NPU sample
 urlFragment: DirectML-YOLOv9
 ---
 
-# YOLOv9 sample
+# YOLOv9 NPU sample
 
 Implements the YOLO94 real-time object detection model using DirectML, DirectMLX and Onnx runtime with the Qualcomm Hexagon NPU (and other NPU's?)
 
