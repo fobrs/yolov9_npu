@@ -34,7 +34,7 @@ This sample demonstrates real time perfromance on a Snapdragon X Elite Dev Box. 
 
 ## External links
 
-* DirectML NPU support: https://blogs.windows.com/windowsdeveloper/2024/08/29/directml-expands-npu-support-to-copilot-pcs-and-webnn/
+* DirectML NPU support (Drivers needed): https://blogs.windows.com/windowsdeveloper/2024/08/29/directml-expands-npu-support-to-copilot-pcs-and-webnn/
 * Paper: [YOLOv4: Optimal Speed and Accuracy of Object Detection
  (arXiv)](https://arxiv.org/abs/2004.10934)
 * Original GitHub: https://github.com/AlexeyAB/darknet
