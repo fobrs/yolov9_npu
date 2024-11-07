@@ -11,7 +11,7 @@ urlFragment: DirectML-YOLOv9
 
 # YOLOv9 NPU sample
 
-Implements the YOLO94 real-time object detection model using DirectML, DirectMLX and Onnx runtime with the Qualcomm Hexagon NPU (and other NPU's?)
+Implements the YOLOv9 real-time object detection model using DirectML, DirectMLX and Onnx runtime with the Qualcomm Hexagon NPU (and other NPU's?)
 
 YOLOv9 is an object detection model capable of recognizing up to 80 different classes of objects in an image. This sample contains a complete end-to-end implementation of the model using DirectML, and is able to run in real time on a user-provided video stream. 
 
@@ -34,6 +34,7 @@ This sample demonstrates real time perfromance on a Snapdragon X Elite Dev Box. 
 
 ## External links
 
+* DirectML NPU support: https://blogs.windows.com/windowsdeveloper/2024/08/29/directml-expands-npu-support-to-copilot-pcs-and-webnn/
 * Paper: [YOLOv4: Optimal Speed and Accuracy of Object Detection
  (arXiv)](https://arxiv.org/abs/2004.10934)
 * Original GitHub: https://github.com/AlexeyAB/darknet
