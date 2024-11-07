@@ -54,25 +54,7 @@
     <ClInclude Include="StepTimer.h">
       <Filter>Common</Filter>
     </ClInclude>
-    <ClInclude Include="TensorUtil.h">
-      <Filter>Header Files</Filter>
-    </ClInclude>
     <ClInclude Include="TensorHelper.h">
-      <Filter>Header Files</Filter>
-    </ClInclude>
-    <ClInclude Include="Resizer.h">
-      <Filter>Header Files</Filter>
-    </ClInclude>
-    <ClInclude Include="CommonTypes.h">
-      <Filter>Header Files</Filter>
-    </ClInclude>
-    <ClInclude Include="utilities.h">
-      <Filter>Header Files</Filter>
-    </ClInclude>
-    <ClInclude Include="ScreenGrab.h">
-      <Filter>Header Files</Filter>
-    </ClInclude>
-    <ClInclude Include="bilinear_transform.h">
       <Filter>Header Files</Filter>
     </ClInclude>
   </ItemGroup>
@@ -98,15 +80,6 @@
     <ClCompile Include="TensorHelper.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
-    <ClCompile Include="Resizer.cpp">
-      <Filter>Source Files</Filter>
-    </ClCompile>
-    <ClCompile Include="ScreenGrab.cpp">
-      <Filter>Source Files</Filter>
-    </ClCompile>
-    <ClCompile Include="bilinear_transform.cpp">
-      <Filter>Source Files</Filter>
-    </ClCompile>
   </ItemGroup>
   <ItemGroup>
     <ResourceCompile Include="resource.rc">
@@ -117,14 +90,6 @@
     <Image Include="Assets\atg.ico">
       <Filter>Assets</Filter>
     </Image>
-  </ItemGroup>
-  <ItemGroup>
-    <FxCompile Include="Assets\VertexShader.hlsl">
-      <Filter>Assets</Filter>
-    </FxCompile>
-    <FxCompile Include="Assets\PixelShader.hlsl">
-      <Filter>Assets</Filter>
-    </FxCompile>
   </ItemGroup>
   <ItemGroup>
     <None Include="Readme.md" />

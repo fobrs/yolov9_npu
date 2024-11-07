@@ -13,17 +13,10 @@
 #include "ReadData.h"
 
 #include "TensorExtents.h"
-#include "TensorUtil.h"
-#include "TensorView.h"
 #include "TensorHelper.h"
-#include "ScreenGrab.h"
-#include "bilinear_transform.h"
 
 double threshold = .40;
 
-//const wchar_t* c_videoPath = L"https://bigroses.net/video/yankees_horror_inning.mp4";
-//const wchar_t* c_videoPath = L"\\\\Diskstation3\\video\\movie\\Jurassic.World.Dominion.2022.720p.BluRay.x264.AAC-[YTS.MX].mp4";
-//const wchar_t* c_videoPath = L"\\\\Diskstation3\\video\\home video\\Formula1\\CheckeredFlag.mkv";
 const wchar_t* c_videoPath = L"grca-grand-canyon-association-park-store_1280x720.mp4";
 const wchar_t* c_imagePath = L"grca-BA-bike-shop_1280x720.jpg";
 
@@ -175,6 +168,7 @@ namespace
     }
 
     // Helper function for fomatting strings. Format(os, a, b, c) is equivalent to os << a << b << c.
+    // Helper function for fomatting strings. Format(os, aresizeer, b, c) is equivalent to os << a << b << c.
     template <typename T>
     std::ostream& Format(std::ostream& os, T&& arg)
     {
@@ -187,7 +181,10 @@ namespace
         os << std::forward<T>(arg);
         return Format(os, std::forward<Ts>(args)...);
     }
-
+    inline unsigned char* pixel(unsigned char* Img, int i, int j, int width, int height, int bpp)
+    {
+        return (Img + ((i * width + j) * bpp));
+    }
 
     // Converts a pixel buffer to an NCHW tensor (batch size 1).
     // Source: buffer of RGB pixels (HWC) using uint8 components.
@@ -195,23 +192,77 @@ namespace
     template <typename T>
     void CopyPixelsToTensor(
         byte*  src,
+        uint32_t srcWidth, uint32_t srcHeight, uint32_t srcChannels,
         dml::Span<std::byte> dst,
         uint32_t height,
         uint32_t width,
         uint32_t channels)
     {
-        uint32_t in_channels = 4;
         dml::Span<T> dstT(reinterpret_cast<T*>(dst.data()), dst.size_bytes() / sizeof(T));
 
-        for (size_t pixelIndex = 0; pixelIndex < height * width; pixelIndex++)
+        if (srcWidth != width || srcHeight != height)
         {
-            float b = static_cast<float>(src[pixelIndex * in_channels + 0]) / 255.0f;
-            float g = static_cast<float>(src[pixelIndex * in_channels + 1]) / 255.0f;
-            float r = static_cast<float>(src[pixelIndex * in_channels + 2]) / 255.0f;
+            unsigned char* Img = src;
+            float ScaledWidthRatio = srcWidth / (float)width;
+            float ScaledHeightRatio = srcHeight / (float)height;
+            uint32_t pixelIndex = 0;
 
-            dstT[pixelIndex + 0 * height * width] = r;
-            dstT[pixelIndex + 1 * height * width] = g;
-            dstT[pixelIndex + 2 * height * width] = b;
+            for (int i = 0; i < height; i++)
+            {
+                for (int j = 0; j < width; j++)
+                {
+                    float mappedheight = i * ScaledHeightRatio;  //rf
+                    float mappedwidth = j * ScaledWidthRatio;   //cf
+                    int   OriginalPosHeight = mappedheight;         //ro
+                    int   OriginalPosWidth = mappedwidth;          //co
+                    float deltaheight = mappedheight - OriginalPosHeight; //delta r
+                    float deltawidth = mappedwidth - OriginalPosWidth;   //delta c
+
+                    unsigned char* temp1 = pixel(Img, OriginalPosHeight, OriginalPosWidth, srcWidth, srcHeight, srcChannels);
+                    unsigned char* temp2 = pixel(Img, ((OriginalPosHeight + 1) >= height ? OriginalPosHeight : OriginalPosHeight + 1),
+                        OriginalPosWidth, srcWidth, srcHeight, srcChannels);
+                    unsigned char* temp3 = pixel(Img, OriginalPosHeight, OriginalPosWidth + 1, srcWidth, srcHeight, srcChannels);
+                    unsigned char* temp4 = pixel(Img, ((OriginalPosHeight + 1) >= srcHeight ? OriginalPosHeight : OriginalPosHeight + 1),
+                        (OriginalPosWidth + 1) >= srcWidth ? OriginalPosWidth : (OriginalPosWidth + 1), srcWidth, srcHeight, srcChannels);
+
+                    float b =
+                        (*(temp1 + 0) * (1 - deltaheight) * (1 - deltawidth) \
+                        + *(temp2 + 0) * (deltaheight) * (1 - deltawidth) \
+                        + *(temp3 + 0) * (1 - deltaheight) * (deltawidth) \
+                        + *(temp4 + 0) * (deltaheight) * (deltawidth)) / 255.0f;
+
+                    float g =
+                        (*(temp1 + 1) * (1 - deltaheight) * (1 - deltawidth) \
+                        + *(temp2 + 1) * (deltaheight) * (1 - deltawidth) \
+                        + *(temp3 + 1) * (1 - deltaheight) * (deltawidth) \
+                        + *(temp4 + 1) * (deltaheight) * (deltawidth)) / 255.0f;
+
+                    float r =
+                        (*(temp1 + 2) * (1 - deltaheight) * (1 - deltawidth) \
+                        + *(temp2 + 2) * (deltaheight) * (1 - deltawidth) \
+                        + *(temp3 + 2) * (1 - deltaheight) * (deltawidth) \
+                        + *(temp4 + 2) * (deltaheight) * (deltawidth)) / 255.0f;
+
+
+                    dstT[pixelIndex + 0 * height * width] = r;
+                    dstT[pixelIndex + 1 * height * width] = g;
+                    dstT[pixelIndex + 2 * height * width] = b;
+                    pixelIndex++;
+                }
+            }
+        }
+        else
+        {
+            for (size_t pixelIndex = 0; pixelIndex < height * width; pixelIndex++)
+            {
+                float b = static_cast<float>(src[pixelIndex * srcChannels + 0]) / 255.0f;
+                float g = static_cast<float>(src[pixelIndex * srcChannels + 1]) / 255.0f;
+                float r = static_cast<float>(src[pixelIndex * srcChannels + 2]) / 255.0f;
+
+                dstT[pixelIndex + 0 * height * width] = r;
+                dstT[pixelIndex + 1 * height * width] = g;
+                dstT[pixelIndex + 2 * height * width] = b;
+            }
         }
     }
 
@@ -342,50 +393,6 @@ bool Sample::CopySharedVideoTextureTensor(std::vector<std::byte> & inputBuffer)
                 // copy the texture to a staging resource
                 d3dContext->CopyResource(stagingTexture.Get(), mediaTexture.Get());
 
-
-                // resize if needed
-#if 0
-                if ((desc2.Width != YoloV4Constants::t_inputWidth || desc2.Height != YoloV4Constants::t_inputHeight))
-                {
-                    // Resize texture
-                    //DirectX::SaveDDSTextureToFile(d3dContext.Get(), stagingTexture.Get(), L"out0.dds");
-                    m_pResizer->LoadTexture(stagingTexture.Get());
-                    m_pResizer->Draw();
-                    m_pResizer->SaveFile(L"out.dds");
-                    ID3D11Texture2D* stagingTexture2;
-                    m_pResizer->GetTargetTexture(&stagingTexture2);
-
-                    D3D11_TEXTURE2D_DESC desc;
-                    stagingTexture2->GetDesc(&desc);
-
-                    D3D11_TEXTURE2D_DESC desc2;
-                    desc2.Width = desc.Width;
-                    desc2.Height = desc.Height;
-                    desc2.MipLevels = desc.MipLevels;
-                    desc2.ArraySize = desc.ArraySize;
-                    desc2.Format = desc.Format;
-                    desc2.SampleDesc = desc.SampleDesc;
-                    desc2.Usage = D3D11_USAGE_STAGING;
-                    desc2.BindFlags = 0;
-                    desc2.CPUAccessFlags = D3D11_CPU_ACCESS_READ;
-                    desc2.MiscFlags = 0;
-
-                    ComPtr<ID3D11Texture2D> stagingTexture3;
-                    DX::ThrowIfFailed(m_player->GetDevice()->CreateTexture2D(&desc2, nullptr, &stagingTexture3));
-                   
-                    d3dContext->CopyResource(stagingTexture3.Get(), stagingTexture2);
-                    stagingTexture = stagingTexture3;
-
-                }
-                else
-#endif
-                {
-                    // copy the texture to a staging resource
-                    d3dContext->CopyResource(stagingTexture.Get(), mediaTexture.Get());
-                }
-
-
-
                 // now, map the staging resource
                 hr = d3dContext->Map(
                     stagingTexture.Get(),
@@ -414,30 +421,14 @@ bool Sample::CopySharedVideoTextureTensor(std::vector<std::byte> & inputBuffer)
         const size_t inputHeight = m_inputShape[m_inputShape.size() - 2];
         const size_t inputWidth = m_inputShape[m_inputShape.size() - 1];
 
-        byte* In = (byte*)mapInfo.pData;
-
-        if (desc.Width != YoloV4Constants::t_inputWidth || desc.Height != YoloV4Constants::t_inputHeight)
-        {
-            int channels = mapInfo.RowPitch / desc.Width;
-            int size = YoloV4Constants::t_inputWidth * YoloV4Constants::t_inputHeight * channels;
-            if (m_Out.size() != size)
-                m_Out.resize(size);
-           
-            resize(In, m_Out.data(),
-                desc.Width, desc.Height, 
-                YoloV4Constants::t_inputWidth, YoloV4Constants::t_inputHeight, 
-                channels);
-            In = m_Out.data();
-        }
-
         switch (m_inputDataType)
         {
         case ONNX_TENSOR_ELEMENT_DATA_TYPE_FLOAT:
-            CopyPixelsToTensor<float>((byte*)In, inputBuffer, inputHeight, inputWidth, inputChannels);
+            CopyPixelsToTensor<float>((byte*)mapInfo.pData, desc.Width, desc.Height, mapInfo.RowPitch / desc.Width, inputBuffer, inputHeight, inputWidth, inputChannels);
             break;
 
         case ONNX_TENSOR_ELEMENT_DATA_TYPE_FLOAT16:
-            CopyPixelsToTensor<half_float::half>((byte*)In, inputBuffer, inputHeight, inputWidth, inputChannels);
+            CopyPixelsToTensor<half_float::half>((byte*)mapInfo.pData, desc.Width, desc.Height, mapInfo.RowPitch / desc.Width, inputBuffer, inputHeight, inputWidth, inputChannels);
             break;
 
         default:
@@ -619,18 +610,6 @@ bool Sample::Initialize(HWND window, int width, int height)
    
     m_deviceResources->CreateWindowSizeDependentResources();
     CreateWindowSizeDependentResources();
-
-    //m_pResizer = std::make_unique<Resizer>();
-    //SIZE targetSize = { YoloV4Constants::t_inputWidth, YoloV4Constants::t_inputHeight };
-    //m_pResizer->InitDx();
-    //m_pResizer->Prepare(targetSize);
-
-    // Add the DML execution provider to ORT using the DML Device and D3D12 Command Queue created above.
-    if (!m_dmlDevice)
-    {
-        MessageBox(0, L"No NPU device found\n", L"Error", MB_OK);
-        return false;
-    }
 
     return true;
 }
