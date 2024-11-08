@@ -263,7 +263,7 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam)
         ofn.hwndOwner = hWnd;
         ofn.lpstrFile = szFile;
         ofn.nMaxFile = sizeof(szFile);
-        ofn.lpstrFilter = L"Video\0*.mp4\0All\0*.*\0";
+        ofn.lpstrFilter = L"Video\0*.mp4;*.mkv\0All\0*.*\0";
         ofn.nFilterIndex = 1;
         ofn.lpstrFileTitle = NULL;
         ofn.nMaxFileTitle = 0;
