@@ -191,12 +191,14 @@ namespace
     template <typename T>
     void CopyPixelsToTensor(
         byte*  src,
-        uint32_t srcWidth, uint32_t srcHeight, uint32_t srcChannels,
+        uint32_t srcWidth, uint32_t srcHeight, uint32_t rowPitch,
         dml::Span<std::byte> dst,
         uint32_t height,
         uint32_t width,
         uint32_t channels)
     {
+        uint32_t srcChannels = rowPitch / srcWidth;
+        uint32_t rowWidth = rowPitch / srcChannels;
         dml::Span<T> dstT(reinterpret_cast<T*>(dst.data()), dst.size_bytes() / sizeof(T));
 
         if (srcWidth != width || srcHeight != height)
@@ -217,12 +219,12 @@ namespace
                     float deltaheight = mappedheight - OriginalPosHeight; //delta r
                     float deltawidth = mappedwidth - OriginalPosWidth;   //delta c
 
-                    unsigned char* temp1 = pixel(Img, OriginalPosHeight, OriginalPosWidth, srcWidth, srcHeight, srcChannels);
+                    unsigned char* temp1 = pixel(Img, OriginalPosHeight, OriginalPosWidth, rowWidth, srcHeight, srcChannels);
                     unsigned char* temp2 = pixel(Img, ((OriginalPosHeight + 1) >= height ? OriginalPosHeight : OriginalPosHeight + 1),
-                        OriginalPosWidth, srcWidth, srcHeight, srcChannels);
-                    unsigned char* temp3 = pixel(Img, OriginalPosHeight, OriginalPosWidth + 1, srcWidth, srcHeight, srcChannels);
+                        OriginalPosWidth, rowWidth, srcHeight, srcChannels);
+                    unsigned char* temp3 = pixel(Img, OriginalPosHeight, OriginalPosWidth + 1, rowWidth, srcHeight, srcChannels);
                     unsigned char* temp4 = pixel(Img, ((OriginalPosHeight + 1) >= srcHeight ? OriginalPosHeight : OriginalPosHeight + 1),
-                        (OriginalPosWidth + 1) >= srcWidth ? OriginalPosWidth : (OriginalPosWidth + 1), srcWidth, srcHeight, srcChannels);
+                        (OriginalPosWidth + 1) >= rowWidth ? OriginalPosWidth : (OriginalPosWidth + 1), rowWidth, srcHeight, srcChannels);
 
                     float b =
                         (*(temp1 + 0) * (1 - deltaheight) * (1 - deltawidth) \
@@ -423,11 +425,11 @@ bool Sample::CopySharedVideoTextureTensor(std::vector<std::byte> & inputBuffer)
         switch (m_inputDataType)
         {
         case ONNX_TENSOR_ELEMENT_DATA_TYPE_FLOAT:
-            CopyPixelsToTensor<float>((byte*)mapInfo.pData, desc.Width, desc.Height, mapInfo.RowPitch / desc.Width, inputBuffer, inputHeight, inputWidth, inputChannels);
+            CopyPixelsToTensor<float>((byte*)mapInfo.pData, desc.Width, desc.Height, mapInfo.RowPitch, inputBuffer, inputHeight, inputWidth, inputChannels);
             break;
 
         case ONNX_TENSOR_ELEMENT_DATA_TYPE_FLOAT16:
-            CopyPixelsToTensor<half_float::half>((byte*)mapInfo.pData, desc.Width, desc.Height, mapInfo.RowPitch / desc.Width, inputBuffer, inputHeight, inputWidth, inputChannels);
+            CopyPixelsToTensor<half_float::half>((byte*)mapInfo.pData, desc.Width, desc.Height, mapInfo.RowPitch, inputBuffer, inputHeight, inputWidth, inputChannels);
             break;
 
         default:
