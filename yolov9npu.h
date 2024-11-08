@@ -362,6 +362,12 @@ private:
     std::vector<Prediction>                         m_preds;
 
     std::vector<byte>                               m_Out;
+    std::chrono::duration<double, std::milli>        m_copypixels_tensor_duration;
+    std::chrono::duration<double, std::milli>        m_inference_duration;
+    
+    Microsoft::WRL::ComPtr<ID2D1Factory8>           m_d2d1_factory;
+    Microsoft::WRL::ComPtr<ID2D1Device7>            m_d2d1_device;
+    Microsoft::WRL::ComPtr<ID2D1DeviceContext>      m_d2dContext;
 
     //wil::unique_handle                              m_fenceEvent{ nullptr };
 

@@ -418,10 +418,148 @@ bool Sample::CopySharedVideoTextureTensor(std::vector<std::byte> & inputBuffer)
             d3dContext->Unmap(mappedTexture.Get(), 0);
             });
 
+        // Record start
+        auto start = std::chrono::high_resolution_clock::now();
+     
         const size_t inputChannels = m_inputShape[m_inputShape.size() - 3];
         const size_t inputHeight = m_inputShape[m_inputShape.size() - 2];
         const size_t inputWidth = m_inputShape[m_inputShape.size() - 1];
 
+        if (desc.Width != inputWidth || desc.Height != inputHeight)
+        {
+            if (m_d2d1_factory.Get() == nullptr)
+            {
+                // Create a Direct2D factory.
+                HRESULT hr = D2D1CreateFactory(
+                    D2D1_FACTORY_TYPE_MULTI_THREADED,
+                    m_d2d1_factory.GetAddressOf());
+
+                // Create D2Device 
+                auto device = m_deviceResources->GetD3DDevice();
+                ComPtr<IDXGIDevice3> dxgiDevice;
+                DX::ThrowIfFailed(
+                    d3dDevice.As(&dxgiDevice)
+                );
+
+                m_d2d1_factory->CreateDevice(
+                    dxgiDevice.Get(),
+                    m_d2d1_device.GetAddressOf()
+                );
+
+                // Get Direct2D device's corresponding device context object.
+                DX::ThrowIfFailed(
+                    m_d2d1_device->CreateDeviceContext(
+                        D2D1_DEVICE_CONTEXT_OPTIONS_NONE,
+                        &m_d2dContext
+                    )
+                );
+
+
+            }
+            if (m_d2dContext.Get())
+            {
+                ComPtr < IDXGISurface> surface;
+               
+                DX::ThrowIfFailed(
+                    mediaTexture.As(&surface)
+                );
+               
+                ComPtr< ID2D1Bitmap1> bitmap;
+                m_d2dContext.Get()->CreateBitmapFromDxgiSurface(surface.Get(), NULL, bitmap.GetAddressOf());
+
+
+                ComPtr<ID2D1Effect> scaleEffect;
+                m_d2dContext->CreateEffect(CLSID_D2D1Scale, &scaleEffect);
+
+                scaleEffect->SetInput(0, bitmap.Get());
+
+               
+                D2D1_SCALE_INTERPOLATION_MODE interpolationMode = D2D1_SCALE_INTERPOLATION_MODE_HIGH_QUALITY_CUBIC;
+                scaleEffect->SetValue(D2D1_SCALE_PROP_SCALE, D2D1::Vector2F((float)inputWidth/(float)desc.Width, (float)inputHeight / (float)desc.Height));
+                scaleEffect->SetValue(D2D1_SCALE_PROP_INTERPOLATION_MODE, reinterpret_cast<const BYTE*>(&interpolationMode), sizeof(D2D1_SCALE_INTERPOLATION_MODE)); // Set the interpolation mode.
+
+                ComPtr< ID2D1Image> image_out;
+                scaleEffect->GetOutput(image_out.GetAddressOf());
+
+                D3D11_TEXTURE2D_DESC texDesc;
+                texDesc.Width = static_cast<UINT>(inputWidth);
+                texDesc.Height = static_cast<UINT>(inputHeight);
+                texDesc.MipLevels = 1;
+                texDesc.ArraySize = 1;
+                texDesc.Format = DXGI_FORMAT_B8G8R8A8_UNORM;
+                texDesc.SampleDesc.Count = 1;
+                texDesc.SampleDesc.Quality = 0;
+                texDesc.Usage = D3D11_USAGE_DEFAULT;
+                texDesc.BindFlags = D3D11_BIND_RENDER_TARGET | D3D11_BIND_SHADER_RESOURCE;
+                texDesc.CPUAccessFlags = 0;
+                texDesc.MiscFlags = 0;
+
+                ComPtr<ID3D11Texture2D> drawTexture;
+                DX::ThrowIfFailed(m_player->GetDevice()->CreateTexture2D(&texDesc, nullptr, &drawTexture));
+
+                ComPtr < IDXGISurface> drawSurface;
+                DX::ThrowIfFailed(
+                    drawTexture.As(&drawSurface)
+                );
+               
+                ComPtr< ID2D1Bitmap1> drawBitmap;
+                m_d2dContext.Get()->CreateBitmapFromDxgiSurface(drawSurface.Get(), NULL, drawBitmap.GetAddressOf());
+                m_d2dContext.Get()->SetTarget(drawBitmap.Get());
+
+                // Draw the image into the device context. Output surface is set as the target of the device context.
+                m_d2dContext.Get()->BeginDraw();
+               
+                auto identityMat = D2D1::Matrix3x2F::Identity();
+
+                m_d2dContext.Get()->SetTransform(identityMat);     // Clear out any existing transform before drawing.
+                D2D1_POINT_2F targetOffset = { 0, 0 };
+                m_d2dContext.Get()->DrawImage(image_out.Get(), targetOffset);
+                D2D1_TAG tag1;
+                D2D1_TAG tag2;
+                auto hr = m_d2dContext.Get()->EndDraw(&tag1, &tag2);
+                m_d2dContext.Get()->SetTarget(nullptr);
+                 
+
+                // we have our scaled image in drawTexture
+
+                // create staging texture
+                D3D11_TEXTURE2D_DESC desc2;
+                desc2.Width = texDesc.Width;
+                desc2.Height = texDesc.Height;
+                desc2.MipLevels = texDesc.MipLevels;
+                desc2.ArraySize = texDesc.ArraySize;
+                desc2.Format = texDesc.Format;
+                desc2.SampleDesc = texDesc.SampleDesc;
+                desc2.Usage = D3D11_USAGE_STAGING;
+                desc2.BindFlags = 0;
+                desc2.CPUAccessFlags = D3D11_CPU_ACCESS_READ;
+                desc2.MiscFlags = 0;
+
+                ComPtr<ID3D11Texture2D> stagingTexture;
+                DX::ThrowIfFailed(m_player->GetDevice()->CreateTexture2D(&desc2, nullptr, &stagingTexture));
+
+                // copy the texture to a staging resource
+                d3dContext->CopyResource(stagingTexture.Get(), drawTexture.Get());
+
+                // now, map the staging resource
+                hr = d3dContext->Map(
+                    stagingTexture.Get(),
+                    0,
+                    D3D11_MAP_READ,
+                    0,
+                    &mapInfo);
+                if (FAILED(hr)) {
+                    throw  std::exception("Failed to map staging texture");
+                }
+
+                mappedTexture = std::move(stagingTexture);
+                mappedTexture->GetDesc(&desc);
+              
+            }
+
+        }
+
+       
         switch (m_inputDataType)
         {
         case ONNX_TENSOR_ELEMENT_DATA_TYPE_FLOAT:
@@ -434,7 +572,9 @@ bool Sample::CopySharedVideoTextureTensor(std::vector<std::byte> & inputBuffer)
 
         default:
             throw std::invalid_argument("Unsupported data type");
-        }     
+        }   
+        auto end = std::chrono::high_resolution_clock::now();
+        m_copypixels_tensor_duration = end - start;
         return true;
     }
     return false;
@@ -867,6 +1007,22 @@ void Sample::Render()
         m_labelFont->DrawString(m_spriteBatch.get(), fps, fpsPos + SimpleMath::Vector2(2.f, 2.f), SimpleMath::Vector4(0.f, 0.f, 0.f, 0.25f));
         m_labelFont->DrawString(m_spriteBatch.get(), fps, fpsPos, ATG::Colors::White);
 
+        wchar_t cpt[32];
+        swprintf_s(cpt, 32, L"scale/copy: %0.2f ms", m_copypixels_tensor_duration.count());
+        SimpleMath::Vector2 cptySize = m_labelFont->MeasureString(cpt);
+        auto cptyPos = SimpleMath::Vector2(safe.right - cptySize.x, static_cast<float>(safe.top) + m_labelFont->GetLineSpacing() * 4.f);
+
+        m_labelFont->DrawString(m_spriteBatch.get(), cpt, cptyPos + SimpleMath::Vector2(2.f, 2.f), SimpleMath::Vector4(0.f, 0.f, 0.f, 0.25f));
+        m_labelFont->DrawString(m_spriteBatch.get(), cpt, cptyPos, ATG::Colors::White);
+
+        wchar_t inf[32];
+        swprintf_s(inf, 32, L"inference: %0.2f ms", m_inference_duration.count());
+        SimpleMath::Vector2 infySize = m_labelFont->MeasureString(inf);
+        auto infyPos = SimpleMath::Vector2(safe.right - infySize.x, static_cast<float>(safe.top) + m_labelFont->GetLineSpacing() * 5.f);
+
+        m_labelFont->DrawString(m_spriteBatch.get(), inf, infyPos + SimpleMath::Vector2(2.f, 2.f), SimpleMath::Vector4(0.f, 0.f, 0.f, 0.25f));
+        m_labelFont->DrawString(m_spriteBatch.get(), inf, infyPos, ATG::Colors::White);
+
         m_spriteBatch->End();
 
         PIXEndEvent(commandList);
@@ -894,6 +1050,10 @@ void Sample::Render()
    
     if (CopySharedVideoTextureTensor(inputBuffer))
     {
+
+        // Record start
+        auto start = std::chrono::high_resolution_clock::now();
+
         // Create input tensor
         Ort::MemoryInfo memoryInfo2 = Ort::MemoryInfo::CreateCpu(OrtArenaAllocator, OrtMemTypeDefault);
         //Ort::MemoryInfo memoryInfo2("DML", OrtAllocatorType::OrtDeviceAllocator, 0, OrtMemType::OrtMemTypeDefault);
@@ -941,6 +1101,9 @@ void Sample::Render()
 
         std::byte* outputData = nullptr;
         outputData = ReadOutputTensor(outputTensor);
+
+        auto end = std::chrono::high_resolution_clock::now();
+        m_inference_duration = end - start;
 
         if (outputData)
         {

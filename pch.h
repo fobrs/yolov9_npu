@@ -104,6 +104,11 @@
 #include "d3dx12.h" // The D3D12 Helper Library that you downloaded.
 #include <dxgi1_4.h>
 
+#include <d2d1.h>
+#include <d2d1_3.h>
+#include <d2d1helper.h>
+#pragma comment(lib, "d2d1.lib")
+
 #define DML_TARGET_VERSION_USE_LATEST
 #include "DirectML.h"
 #include "DirectMLX.h"
