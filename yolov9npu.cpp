@@ -254,16 +254,30 @@ namespace
         }
         else
         {
+            double rs, gs, bs;
+            rs = gs = bs = 0.0;
             for (size_t pixelIndex = 0; pixelIndex < height * width; pixelIndex++)
             {
                 float b = static_cast<float>(src[pixelIndex * srcChannels + 0]) / 255.0f;
                 float g = static_cast<float>(src[pixelIndex * srcChannels + 1]) / 255.0f;
                 float r = static_cast<float>(src[pixelIndex * srcChannels + 2]) / 255.0f;
 
+                //rs += r;
+                //gs += g;
+                //bs += b;
+
+                
                 dstT[pixelIndex + 0 * height * width] = r;
                 dstT[pixelIndex + 1 * height * width] = g;
                 dstT[pixelIndex + 2 * height * width] = b;
             }
+
+            //rs /= height * width;
+            //gs /= height * width;
+            //bs /= height * width;
+            //std::stringstream ss;
+            //Format(ss, "red: ", rs, ", green: ", gs, ", blue: ", bs,  "\n");
+            //OutputDebugStringA(ss.str().c_str());
         }
     }
 
@@ -1023,6 +1037,14 @@ void Sample::Render()
         m_labelFont->DrawString(m_spriteBatch.get(), inf, infyPos + SimpleMath::Vector2(2.f, 2.f), SimpleMath::Vector4(0.f, 0.f, 0.f, 0.25f));
         m_labelFont->DrawString(m_spriteBatch.get(), inf, infyPos, ATG::Colors::White);
 
+        wchar_t out[32];
+        swprintf_s(out, 32, L"output: %0.2f ms", m_output_duration.count());
+        SimpleMath::Vector2 outySize = m_labelFont->MeasureString(out);
+        auto outyPos = SimpleMath::Vector2(safe.right - outySize.x, static_cast<float>(safe.top) + m_labelFont->GetLineSpacing() * 6.f);
+
+        m_labelFont->DrawString(m_spriteBatch.get(), out, outyPos + SimpleMath::Vector2(2.f, 2.f), SimpleMath::Vector4(0.f, 0.f, 0.f, 0.25f));
+        m_labelFont->DrawString(m_spriteBatch.get(), out, outyPos, ATG::Colors::White);
+
         m_spriteBatch->End();
 
         PIXEndEvent(commandList);
@@ -1045,6 +1067,21 @@ void Sample::Render()
     const size_t inputWidth = m_inputShape[m_inputShape.size() - 1];
     const size_t inputElementSize = m_inputDataType == ONNX_TENSOR_ELEMENT_DATA_TYPE_FLOAT ? sizeof(float) : sizeof(uint16_t);
 
+    // next version
+    // // Create d3d_buffer using D3D12 APIs
+    //    Microsoft::WRL::ComPtr<ID3D12Resource> d3d_buffer = ...;
+    // 
+    //  use hlsl ImageToTensor.hlsl compute shader to copy textture to input format texture d3d_buffer
+    // 
+    // // Create the dml resource from the D3D resource.
+    //    ort_dml_api->CreateGPUAllocationFromD3DResource(d3d_buffer.Get(), &dml_resource);
+    // 
+    // Ort::Value ort_value(Ort::Value::CreateTensor(memory_info_dml, dml_resource,
+    //         d3d_buffer_size, shape.data(), shape.size(),
+    //            ONNX_TENSOR_ELEMENT_DATA_TYPE_FLOAT));
+    // 
+    // see: https://github.com/ankan-ban/HelloOrtDml/blob/main/Main.cpp
+    // https://onnxruntime.ai/docs/performance/device-tensor.html
     // Load image and transform it into an NCHW tensor with the correct shape and data type.
     std::vector<std::byte> inputBuffer(inputChannels* inputHeight* inputWidth* inputElementSize);
    
@@ -1107,6 +1144,9 @@ void Sample::Render()
 
         if (outputData)
         {
+            // Record start
+            auto start = std::chrono::high_resolution_clock::now();
+
             GetPredictions(outputData);
 
             // Readback the raw data from the model, compute the model's predictions, and render the bounding boxes
@@ -1116,9 +1156,9 @@ void Sample::Render()
                 // Print some debug information about the predictions
 #if 0
                 std::stringstream ss;
-                Format(ss, "# of predictions: ", preds.size(), "\n");
+                Format(ss, "# of predictions: ", m_preds.size(), "\n");
 
-                for (const auto& pred : preds)
+                for (const auto& pred : m_preds)
                 {
                     const char* className = YoloV4Constants::c_classes[pred.predictedClass];
                     int xmin = static_cast<int>(std::round(pred.xmin));
@@ -1217,6 +1257,8 @@ void Sample::Render()
 
                 PIXEndEvent(commandList);
             }
+            auto end = std::chrono::high_resolution_clock::now();
+            m_output_duration = end - start;
         }
     }
 
