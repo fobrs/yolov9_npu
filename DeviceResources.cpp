@@ -66,9 +66,32 @@ DeviceResources::~DeviceResources()
     WaitForGpu();
 }
 
+void MyDeviceRemovedHandler(ID3D12Device* pDevice)
+{
+    ComPtr<ID3D12DeviceRemovedExtendedData> pDred;
+    ThrowIfFailed(pDevice->QueryInterface(IID_PPV_ARGS(&pDred)));
+
+    D3D12_DRED_AUTO_BREADCRUMBS_OUTPUT DredAutoBreadcrumbsOutput;
+    D3D12_DRED_PAGE_FAULT_OUTPUT DredPageFaultOutput;
+    ThrowIfFailed(pDred->GetAutoBreadcrumbsOutput(&DredAutoBreadcrumbsOutput));
+    ThrowIfFailed(pDred->GetPageFaultAllocationOutput(&DredPageFaultOutput));
+
+    // Custom processing of DRED data can be done here.
+    // Produce telemetry...
+    // Log information to console...
+    // break into a debugger...
+}
+
 // Configures the Direct3D device, and stores handles to it and the device context.
 void DeviceResources::CreateDeviceResources()
 {
+    ComPtr<ID3D12Debug> debugController;
+    if (SUCCEEDED(D3D12GetDebugInterface(IID_PPV_ARGS(&debugController))))
+    {
+       // debugController->EnableDebugLayer();
+    }
+
+
     ThrowIfFailed(CreateDXGIFactory2(m_dxgiFactoryFlags, IID_PPV_ARGS(m_dxgiFactory.ReleaseAndGetAddressOf())));
 
     // Determines whether tearing support is available for fullscreen borderless windows.
@@ -94,6 +117,14 @@ void DeviceResources::CreateDeviceResources()
 
     ComPtr<IDXGIAdapter1> adapter;
     GetAdapter(adapter.GetAddressOf());
+
+    // debug
+    ComPtr<ID3D12DeviceRemovedExtendedDataSettings> pDredSettings;
+    ThrowIfFailed(D3D12GetDebugInterface(IID_PPV_ARGS(&pDredSettings)));
+
+    // Turn on AutoBreadcrumbs and Page Fault reporting
+    pDredSettings->SetAutoBreadcrumbsEnablement(D3D12_DRED_ENABLEMENT_FORCED_ON);
+    pDredSettings->SetPageFaultEnablement(D3D12_DRED_ENABLEMENT_FORCED_ON);
 
     // Create the DX12 API device object.
     ThrowIfFailed(D3D12CreateDevice(
