@@ -214,8 +214,8 @@ namespace
                 {
                     float mappedheight = i * ScaledHeightRatio;  //rf
                     float mappedwidth = j * ScaledWidthRatio;   //cf
-                    int   OriginalPosHeight = mappedheight;         //ro
-                    int   OriginalPosWidth = mappedwidth;          //co
+                    int   OriginalPosHeight = (int)mappedheight;         //ro
+                    int   OriginalPosWidth =(int) mappedwidth;          //co
                     float deltaheight = mappedheight - OriginalPosHeight; //delta r
                     float deltawidth = mappedwidth - OriginalPosWidth;   //delta c
 
@@ -346,6 +346,8 @@ namespace
 
 bool Sample::CopySharedVideoTextureTensor(std::vector<std::byte> & inputBuffer)
 {
+    // Record start
+    auto start = std::chrono::high_resolution_clock::now();
 
     auto hr = m_d3dDevice->GetDeviceRemovedReason();
     ComPtr<ID3D11Texture2D> mediaTexture;
@@ -432,8 +434,7 @@ bool Sample::CopySharedVideoTextureTensor(std::vector<std::byte> & inputBuffer)
             d3dContext->Unmap(mappedTexture.Get(), 0);
             });
 
-        // Record start
-        auto start = std::chrono::high_resolution_clock::now();
+       
      
         const size_t inputChannels = m_inputShape[m_inputShape.size() - 3];
         const size_t inputHeight = m_inputShape[m_inputShape.size() - 2];
@@ -594,58 +595,150 @@ bool Sample::CopySharedVideoTextureTensor(std::vector<std::byte> & inputBuffer)
     return false;
 }
 
-std::byte* Sample::ReadOutputTensor(Ort::Value& outputensor)
+//std::vector<std::byte*> Sample::ReadOutputTensors(std::vector< Ort::Value >& output_tensors)
+std::byte* Sample::ReadOutputTensors(Ort::Value & outputensor)
 {
-    // Read results
-    const auto memoryInfo = outputensor.GetTensorMemoryInfo();
-    Ort::Allocator allocator(m_session, memoryInfo);
+    std::vector<std::byte*> outputData;
+    //for (auto& outputensor : output_tensors)
+    //{
+        // Read results
+        const auto memoryInfo = outputensor.GetTensorMemoryInfo();
+        Ort::Allocator allocator(m_session, memoryInfo);
 
-    ComPtr<ID3D12Resource> outputResource;
-    Ort::ThrowOnError(m_ortDmlApi->GetD3D12ResourceFromAllocation(allocator, outputensor.GetTensorMutableData<void*>(), &outputResource));
-    D3D12_RESOURCE_DESC resource_desc = outputResource->GetDesc();
-    //unsigned int* data;
-    //outputResource.Get()->Map(0, nullptr, reinterpret_cast<void**>(&data));
+        ComPtr<ID3D12Resource> outputResource;
+        Ort::ThrowOnError(m_ortDmlApi->GetD3D12ResourceFromAllocation(allocator, outputensor.GetTensorMutableData<void*>(), &outputResource));
+        D3D12_RESOURCE_DESC resource_desc = outputResource->GetDesc();
+        //unsigned int* data;
+        //outputResource.Get()->Map(0, nullptr, reinterpret_cast<void**>(&data));
 
-    assert(resource_desc.Dimension == D3D12_RESOURCE_DIMENSION_BUFFER);
-    const size_t data_size_in_bytes = static_cast<size_t>(resource_desc.Width);
+        assert(resource_desc.Dimension == D3D12_RESOURCE_DIMENSION_BUFFER);
+        const size_t data_size_in_bytes = static_cast<size_t>(resource_desc.Width);
 
-    // Create intermediate upload resource visible to both CPU and GPU.
-    ComPtr<ID3D12Resource> download_buffer = CreateD3D12ResourceOfByteSize(m_d3dDevice.Get(), data_size_in_bytes, D3D12_HEAP_TYPE_READBACK, D3D12_RESOURCE_STATE_COPY_DEST, D3D12_RESOURCE_FLAG_NONE);
+        // Create intermediate upload resource visible to both CPU and GPU.
+        ComPtr<ID3D12Resource> download_buffer = CreateD3D12ResourceOfByteSize(m_d3dDevice.Get(), data_size_in_bytes, D3D12_HEAP_TYPE_READBACK, D3D12_RESOURCE_STATE_COPY_DEST, D3D12_RESOURCE_FLAG_NONE);
 
-    D3D12_RESOURCE_BARRIER resource_barrier = {};
-    resource_barrier.Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
-    resource_barrier.Flags = D3D12_RESOURCE_BARRIER_FLAG_NONE;
-    resource_barrier.Transition = {};
-    resource_barrier.Transition.pResource = outputResource.Get();
-    resource_barrier.Transition.Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
-    resource_barrier.Transition.StateBefore = D3D12_RESOURCE_STATE_UNORDERED_ACCESS;
-    resource_barrier.Transition.StateAfter = D3D12_RESOURCE_STATE_COPY_SOURCE;
+        D3D12_RESOURCE_BARRIER resource_barrier = {};
+        resource_barrier.Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
+        resource_barrier.Flags = D3D12_RESOURCE_BARRIER_FLAG_NONE;
+        resource_barrier.Transition = {};
+        resource_barrier.Transition.pResource = outputResource.Get();
+        resource_barrier.Transition.Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
+        resource_barrier.Transition.StateBefore = D3D12_RESOURCE_STATE_UNORDERED_ACCESS;
+        resource_barrier.Transition.StateAfter = D3D12_RESOURCE_STATE_COPY_SOURCE;
 
-    // Copy GPU data into the download buffer.
-    m_commandList.Get()->ResourceBarrier(1, &resource_barrier);
-    m_commandList.Get()->CopyResource(download_buffer.Get(), outputResource.Get());
-    THROW_IF_FAILED(m_commandList.Get()->Close());
-    ID3D12CommandList* command_lists[] = { m_commandList.Get() };
-    m_commandQueue->ExecuteCommandLists(static_cast<uint32_t>(std::size(command_lists)), command_lists);
-    WaitForQueueToComplete(m_commandQueue.Get());
-    THROW_IF_FAILED(m_commandAllocator->Reset());
-    THROW_IF_FAILED(m_commandList->Reset(m_commandAllocator.Get(), nullptr));
+        // Copy GPU data into the download buffer.
+        m_commandList.Get()->ResourceBarrier(1, &resource_barrier);
+        m_commandList.Get()->CopyResource(download_buffer.Get(), outputResource.Get());
+        THROW_IF_FAILED(m_commandList.Get()->Close());
+        ID3D12CommandList* command_lists[] = { m_commandList.Get() };
+        m_commandQueue->ExecuteCommandLists(static_cast<uint32_t>(std::size(command_lists)), command_lists);
+        WaitForQueueToComplete(m_commandQueue.Get());
+        THROW_IF_FAILED(m_commandAllocator->Reset());
+        THROW_IF_FAILED(m_commandList->Reset(m_commandAllocator.Get(), nullptr));
 
-    // Copy from shared GPU/CPU memory to ordinary system RAM.
-    //size_t clamped_data_byte_size = std::min(data_size_in_bytes, destination_data.size());
-    std::byte* sourceData = nullptr;
-    D3D12_RANGE range = { 0, data_size_in_bytes };
-    THROW_IF_FAILED(download_buffer->Map(0, &range, reinterpret_cast<void**>(&sourceData)));
-    download_buffer->Unmap(0, nullptr);
+        // Copy from shared GPU/CPU memory to ordinary system RAM.
+        //size_t clamped_data_byte_size = std::min(data_size_in_bytes, destination_data.size());
+        std::byte* sourceData = nullptr;
+        D3D12_RANGE range = { 0, data_size_in_bytes };
+        THROW_IF_FAILED(download_buffer->Map(0, &range, reinterpret_cast<void**>(&sourceData)));
+        download_buffer->Unmap(0, nullptr);
 
-    return sourceData;
+        std::byte* d = (std::byte * )malloc(data_size_in_bytes);
+        memcpy(d, sourceData, data_size_in_bytes);
+
+        return d;
+        //outputData.push_back(d);
+    //}
+    //return outputData;
+    return nullptr;
 }
 
 
-void Sample::GetPredictions(std::byte * outputData)
+void Sample::GetPredictions(std::vector<const std::byte*>& outputData, std::vector<std::vector<int64_t>>& shapes)
+{
+    //auto shape = m_outputShape;
+    if (outputData.size() != 3)
+        return;
+
+    Vec3<float> value1((float*)outputData[0], shapes[0][0], shapes[0][1], shapes[0][2]);
+    Vec2<float> value2((float*)outputData[1], shapes[1][0], shapes[1][1]);
+    Vec2<float> value3((float*)outputData[2], shapes[2][0], shapes[2][1]);
+
+
+    // Scale the boxes to be relative to the original image size
+    auto viewport = m_deviceResources->GetScreenViewport();
+    float xScale = (float)viewport.Width / m_inputWidth;
+    float yScale = (float)viewport.Height / m_inputHeight;
+
+    //m_detections.resize(value.z);
+    m_preds.clear();
+
+    for (Size i = 0; i < value1.z; ++i)
+    {
+        //Detections& list = m_detections[i];
+        //list.clear();
+
+        for (Size j = 0; j < value1.y; ++j)
+        {
+            auto ptr2 = value2[i][j];
+            if (ptr2 < threshold) continue;
+
+            auto ptr = value1[i][j];
+           
+            Detection result;
+            result.x = ptr[0];
+            result.y = ptr[1];
+            result.w = ptr[2];
+            result.h = ptr[3];
+            result.index = (Size)value3[i][j];
+            result.confidence = (float)ptr2;
+
+            // We need to do some postprocessing on the raw values before we return them
+
+            // Convert x,y,w,h to xmin,ymin,xmax,ymax
+            float xmin = result.x;
+            float ymin = result.y;
+            float xmax = result.w;
+            float ymax = result.h;
+
+            xmin *= xScale;
+            ymin *= yScale;
+            xmax *= xScale;
+            ymax *= yScale;
+
+            // Clip values out of range
+            xmin = std::clamp(xmin, 0.0f, (float)viewport.Width);
+            ymin = std::clamp(ymin, 0.0f, (float)viewport.Height);
+            xmax = std::clamp(xmax, 0.0f, (float)viewport.Width);
+            ymax = std::clamp(ymax, 0.0f, (float)viewport.Height);
+
+            // Discard invalid boxes
+            if (xmax <= xmin || ymax <= ymin || IsInfOrNan({ xmin, ymin, xmax, ymax }))
+            {
+                continue;
+            }
+
+            Prediction pred = {};
+            pred.xmin = xmin;
+            pred.ymin = ymin;
+            pred.xmax = xmax;
+            pred.ymax = ymax;
+            pred.score = result.confidence;
+            pred.predictedClass = result.index;
+            m_preds.push_back(pred);
+        }
+    }
+    // Apply NMS to select the best boxes
+    m_preds = ApplyNonMaximalSuppression(m_preds, YoloV4Constants::c_nmsThreshold);
+
+
+}
+
+
+void Sample::GetPredictions(const std::byte *  outputData, std::vector<int64_t> & shape)
 {
 
-    auto shape = m_outputShape;
+    //auto shape = m_outputShape;
 
     Vec3<float> value((float*)outputData, shape[0], shape[1], shape[2]);
 
@@ -862,6 +955,26 @@ void Sample::Update(DX::StepTimer const& timer)
 }
 #pragma endregion
 
+void Sample::OnNewMopdel(wchar_t* modelfile)
+{
+
+    if (m_player->IsPlaying())
+    {
+        m_player->Pause();
+    }
+
+    InitializeDirectMLResources(modelfile);
+
+    while (!m_player->IsInfoReady())
+    {
+        SwitchToThread();
+    }
+
+    m_player->Play();
+    m_player->Skip(-5);
+}
+
+
 void Sample::OnNewFile(wchar_t* filename)
 {
     if (m_player->IsPlaying())
@@ -989,7 +1102,7 @@ void Sample::Render()
 
         const wchar_t* mainLegend = m_ctrlConnected ?
             L"[View] Exit   [X] Play/Pause"
-            : L"ESC - Exit     ENTER - Play/Pause   Mouse Context Menu - Open new video  (Shift) < or (Shift) > - back- forward";
+            : L"ESC - Exit     ENTER - Play/Pause   Mouse Context Menu - Open new Video (click above) / Onnx-Model (click on this line)   (Shift) < or (Shift) > - back- forward";
         SimpleMath::Vector2 mainLegendSize = m_legendFont->MeasureString(mainLegend);
         auto mainLegendPos = SimpleMath::Vector2(xCenter - mainLegendSize.x / 2, static_cast<float>(safe.bottom) - m_legendFont->GetLineSpacing());
 
@@ -1006,12 +1119,13 @@ void Sample::Render()
         m_labelFontBold->DrawString(m_spriteBatch.get(), modeLabel, modeLabelPos + SimpleMath::Vector2(2.f, 2.f), SimpleMath::Vector4(0.f, 0.f, 0.f, 0.25f));
         m_labelFontBold->DrawString(m_spriteBatch.get(), modeLabel, modeLabelPos, ATG::Colors::White);
 
-        const wchar_t* modeType = L"YOLO V9 NPU";
-        SimpleMath::Vector2 modeTypeSize = m_labelFont->MeasureString(modeType);
-        auto modeTypePos = SimpleMath::Vector2(safe.right - modeTypeSize.x, static_cast<float>(safe.top) + m_labelFontBold->GetLineSpacing());
+        wchar_t model[128];
+        swprintf_s(model, 128, L"%s NPU", m_modelfile.c_str());
+        SimpleMath::Vector2 modelSize = m_labelFont->MeasureString(model);
+        auto modelPos = SimpleMath::Vector2(safe.right - modelSize.x, static_cast<float>(safe.top) + m_labelFontBold->GetLineSpacing());
 
-        m_labelFont->DrawString(m_spriteBatch.get(), modeType, modeTypePos + SimpleMath::Vector2(2.f, 2.f), SimpleMath::Vector4(0.f, 0.f, 0.f, 0.25f));
-        m_labelFont->DrawString(m_spriteBatch.get(), modeType, modeTypePos, ATG::Colors::White);
+        m_labelFont->DrawString(m_spriteBatch.get(), model, modelPos + SimpleMath::Vector2(2.f, 2.f), SimpleMath::Vector4(0.f, 0.f, 0.f, 0.25f));
+        m_labelFont->DrawString(m_spriteBatch.get(), model, modelPos, ATG::Colors::White);
 
         wchar_t fps[16];
         swprintf_s(fps, 16, L"%0.2f FPS", m_fps.GetFPS());
@@ -1103,30 +1217,80 @@ void Sample::Render()
             m_inputDataType
         );
 
-        // Create output tensor
-        auto type_info = m_session.GetOutputTypeInfo(0);
-        auto tensor_info = type_info.GetTensorTypeAndShapeInfo();
-        auto output = CreateDmlValue(tensor_info, m_commandQueue.Get());
-        auto outputTensor = std::move(output.first);
+       
 
         // Bind tensors
         Ort::MemoryInfo memoryInfo0 = Ort::MemoryInfo::CreateCpu(OrtArenaAllocator, OrtMemTypeDefault);
         Ort::Allocator allocator0(m_session, memoryInfo0);
         auto inputName = m_session.GetInputNameAllocated(0, allocator0);
-        auto outputName = m_session.GetOutputNameAllocated(0, allocator0);
         auto bindings = Ort::IoBinding::IoBinding(m_session);
-        bindings.BindInput(inputName.get(), inputTensor);
-        bindings.BindOutput(outputName.get(), outputTensor /*memoryInfo*/);
+        try {
+           
+            bindings.BindInput(inputName.get(), inputTensor);
+        }
+        catch (const std::runtime_error& re) {
+            const char* err = re.what();
+            MessageBoxA(0, err, "Error loading model", MB_YESNO);
+            std::cerr << "Runtime error: " << re.what() << std::endl;
+            exit(1);
+        }
+        // Create output tensor(s) and bind
+        auto tensors = m_session.GetOutputCount();
+        std::vector<std::string> output_names;
+        std::vector<std::vector<int64_t>> output_shapes;
+        for (int i = 0; i < tensors; i++)
+        {
+            auto output_name = m_session.GetOutputNameAllocated(i, allocator0);
+            output_names.push_back(output_name.get());
+            auto type_info = m_session.GetOutputTypeInfo(i);
+            auto tensor_info = type_info.GetTensorTypeAndShapeInfo();
+            auto shape = tensor_info.GetShape();
+            output_shapes.push_back(shape);
+            bindings.BindOutput(output_names.back().c_str(), memoryInfo2);
+        }
+        HRESULT hr0;
+        try {
+            // Record start
+            //auto start = std::chrono::high_   resolution_clock::now();
 
-        // Record start
-        //auto start = std::chrono::high_resolution_clock::now();
+            // Run the session to get inference results.
+            Ort::RunOptions runOpts;
+            m_session.Run(runOpts, bindings);
+            
+            hr0 = m_d3dDevice->GetDeviceRemovedReason();
 
-        // Run the session to get inference results.
-        Ort::RunOptions runOpts;
-        m_session.Run(runOpts, bindings);
-        bindings.SynchronizeOutputs();
+            bindings.SynchronizeOutputs();
+        }
+        catch (const std::runtime_error& re) {
+            const char* err = re.what();
+            MessageBoxA(0, err, "Error loading model", MB_YESNO);
+            std::cerr << "Runtime error: " << re.what() << std::endl;
+            exit(1);
+        }
+        catch (const std::exception& ex)
+        {
+            const char* err = ex.what();
+            MessageBoxA(0, err, "Error loading model", MB_YESNO);
+            std::cerr << "Error occurred: " << ex.what() << std::endl;
+            exit(1);
+        }
 
+
+        try {
+
+            THROW_IF_FAILED(m_d3dDevice->GetDeviceRemovedReason());
+        }
+        catch (const std::exception & ex)
+        {
+            const char* err = ex.what();
+            MessageBoxA(0, err, "Error loading model", MB_YESNO);
+            std::cerr << "Error occurred: " << ex.what() << std::endl;
+            exit(1);
+            //extern void MyDeviceRemovedHandler(ID3D12Device * pDevice);
+            //MyDeviceRemovedHandler(m_d3dDevice.Get());
+        }
         // Queue fence, and wait for completion
+
         ComPtr<ID3D12Fence> fence;
         THROW_IF_FAILED(m_d3dDevice->CreateFence(0, D3D12_FENCE_FLAG_NONE, IID_PPV_ARGS(fence.GetAddressOf())));
         THROW_IF_FAILED(m_commandQueue->Signal(fence.Get(), 1));
@@ -1134,20 +1298,27 @@ void Sample::Render()
         wil::unique_handle fenceEvent(CreateEvent(nullptr, FALSE, FALSE, nullptr));
         THROW_IF_FAILED(fence->SetEventOnCompletion(1, fenceEvent.get()));
         THROW_HR_IF(E_FAIL, WaitForSingleObject(fenceEvent.get(), INFINITE) != WAIT_OBJECT_0);
-
-
-        std::byte* outputData = nullptr;
-        outputData = ReadOutputTensor(outputTensor);
+    
+        std::vector<const std::byte*> outputData;
+        int  i = 0;
+        for (int i = 0; i < tensors; i++)
+        {
+            const std::byte* outputBuffer = reinterpret_cast<const std::byte*>(bindings.GetOutputValues()[i].GetTensorRawData());
+            outputData.push_back(outputBuffer);
+        }
 
         auto end = std::chrono::high_resolution_clock::now();
         m_inference_duration = end - start;
 
-        if (outputData)
+        if (outputData.size() > 0)
         {
             // Record start
             auto start = std::chrono::high_resolution_clock::now();
 
-            GetPredictions(outputData);
+            if (outputData.size() == 1)
+                GetPredictions(outputData[0], output_shapes[0]);
+            else
+                GetPredictions(outputData, output_shapes);
 
             // Readback the raw data from the model, compute the model's predictions, and render the bounding boxes
             {

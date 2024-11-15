@@ -92,12 +92,12 @@ namespace YoloV4Constants
     static const uint32_t c_numClasses = ARRAYSIZE(c_classes);
 
     // texture size the input tensor expects
-    static const uint32_t t_inputWidth = 1280;
-    static const uint32_t t_inputHeight = 720;
+    static  uint32_t t_inputWidth = 1280;
+    static  uint32_t t_inputHeight = 720;
 
     // Input images are rescaled to 512x288 before being fed into the model
-    static const uint32_t c_inputWidth = 512;
-    static const uint32_t c_inputHeight = 288;
+    static uint32_t c_inputWidth = 512;
+    static uint32_t c_inputHeight = 288;
 
     // Discard any predictions which have a low score (i.e. predictions that the model isn't very confident about)
     static const float c_scoreThreshold = 0.25f;
@@ -225,6 +225,7 @@ public:
     void OnWindowMoved();
     void OnWindowSizeChanged(int width, int height);
     void OnNewFile(wchar_t* filename);
+    void OnNewMopdel(wchar_t* modelfile);
 
     // Properties
     void GetDefaultSize(int& width, int& height) const;
@@ -238,12 +239,13 @@ private:
 
     void CreateDeviceDependentResources();
     void CreateTextureResources();
-    void InitializeDirectMLResources();
+    void InitializeDirectMLResources(wchar_t* model_path = nullptr);
     void CreateUIResources();
     void CreateWindowSizeDependentResources();
 
     bool CopySharedVideoTextureTensor(std::vector<std::byte>& inputbuffer);
-    std::byte* ReadOutputTensor(Ort::Value& outputensor);
+    //std::vector<std::byte*> ReadOutputTensors(std::vector< Ort::Value > & output_tensors);
+    std::byte* ReadOutputTensors(Ort::Value & output_tensor);
 
     void InitializeDirectML(ID3D12Device1** d3dDeviceOut, ID3D12CommandQueue** commandQueueOut, IDMLDevice** dmlDeviceOut,
         ID3D12CommandAllocator** commandAllocatorOut,
@@ -264,7 +266,8 @@ private:
     // Given a raw output of the model, retrieves the predictions (a bounding box, detected class, and score) of the
     // model.
 
-    void GetPredictions(std::byte* outputData);
+    void GetPredictions(const std::byte* outputData, std::vector<int64_t> & shape);
+    void GetPredictions(std::vector<const std::byte*>& outputData, std::vector<std::vector<int64_t>>& shapes);
 
     // Device resources
     std::unique_ptr<DX::DeviceResources>            m_deviceResources;
@@ -295,7 +298,9 @@ private:
     std::unique_ptr<DirectX::SpriteFont>            m_ctrlFont;
 
     // Video player
+public:
     std::unique_ptr<MediaEnginePlayer>              m_player;
+private:
     HANDLE                                          m_sharedVideoTexture;
 
     // Direct3D 12 objects for rendering texture to screen
@@ -347,6 +352,7 @@ private:
     Microsoft::WRL::ComPtr<IDMLOperatorInitializer> m_dmlOpInitializer;
 
 
+    std::wstring                                    m_modelfile;
     const OrtDmlApi* m_ortDmlApi{ nullptr };
     Ort::Session                                    m_session{ nullptr };
     Ort::Value                                      m_inputTensor{ nullptr };
@@ -355,6 +361,8 @@ private:
     std::vector<int64_t>                            m_inputShape;
     std::vector<int64_t>                            m_outputShape;
     ONNXTensorElementDataType                       m_inputDataType;
+    size_t                                          m_inputWidth;
+    size_t                                          m_inputHeight;
 
     DWORD                                           m_dxgiFactoryFlags;
 

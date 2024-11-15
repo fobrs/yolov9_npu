@@ -254,6 +254,13 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam)
     case WM_RBUTTONUP:
     case WM_CONTEXTMENU:
     {
+        RECT rect;
+        POINT p = { GET_X_LPARAM(lParam) , GET_Y_LPARAM(lParam) };
+        //ScreenToClient(hWnd, &p);
+        GetClientRect(hWnd, &rect);
+       
+
+
         OPENFILENAME ofn;       // common dialog box structure
         TCHAR szFile[260] = { 0 };       // if using TCHAR macros
 
@@ -263,19 +270,37 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam)
         ofn.hwndOwner = hWnd;
         ofn.lpstrFile = szFile;
         ofn.nMaxFile = sizeof(szFile);
-        ofn.lpstrFilter = L"Video\0*.mp4;*.mkv\0All\0*.*\0";
+        ofn.lpstrFilter = L"Video\0*.mp4;*.mkv\0Models\0*.onnx\0All\0*.*\0";
         ofn.nFilterIndex = 1;
         ofn.lpstrFileTitle = NULL;
         ofn.nMaxFileTitle = 0;
         ofn.lpstrInitialDir = NULL;
         ofn.Flags = OFN_PATHMUSTEXIST | OFN_FILEMUSTEXIST;
 
+        // where did I click?
+        if (p.y > rect.top + ((rect.bottom - rect.top) * 9 / 10))
+            ofn.lpstrFilter = L"Onnx Models\0*.onnx\0All\0*.*\0";
+        else
+            ofn.lpstrFilter = L"Video\0*.mp4;*.mkv\0All\0*.*\0";
+
         if (GetOpenFileName(&ofn) == TRUE)
         {
+            //
             // use ofn.lpstrFile
-            sample->OnNewFile(ofn.lpstrFile);
+            
+            if (wcsstr(ofn.lpstrFile, L".onnx") != 0)
+            {
+                sample->OnNewMopdel(ofn.lpstrFile);
+            }
+            else
+            {
+                sample->OnNewFile(ofn.lpstrFile);
+            }          
+        }
+        else
+        {
+            sample->m_player->Skip(-5);
 
-           
         }
         return 1;
     break;

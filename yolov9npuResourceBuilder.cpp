@@ -205,7 +205,7 @@ void Sample::InitializeDirectML(ID3D12Device1** d3dDeviceOut, ID3D12CommandQueue
 }
 
 
-void Sample::InitializeDirectMLResources()
+void Sample::InitializeDirectMLResources(wchar_t * model_path)
 {
     const OrtApi& ortApi = Ort::GetApi();
     static Ort::Env s_OrtEnv{ nullptr };
@@ -216,16 +216,68 @@ void Sample::InitializeDirectMLResources()
     sessionOptions.DisableMemPattern();
     sessionOptions.DisablePerSessionThreads();
     sessionOptions.SetExecutionMode(ExecutionMode::ORT_SEQUENTIAL);
+
+    //sessionOptions.SetExecutionMode(ExecutionMode::ORT_PARALLEL);
+    //sessionOptions.AddConfigEntry("session.load_model_format", "ORT");
+    //sessionOptions.SetGraphOptimizationLevel(GraphOptimizationLevel::ORT_ENABLE_ALL);
+
     m_ortDmlApi = nullptr;
     Ort::ThrowOnError(ortApi.GetExecutionProviderApi("DML", ORT_API_VERSION, reinterpret_cast<const void**>(&m_ortDmlApi)));
     Ort::ThrowOnError(m_ortDmlApi->SessionOptionsAppendExecutionProvider_DML1(sessionOptions, m_dmlDevice.Get(), m_commandQueue.Get()));
 
-    // Create the session
-    //auto session = Ort::Session(s_OrtEnv, L"mobilenetv2-7-fp16.onnx", sessionOptions);
-    // model from here:
-    // https://github.com/DakeQQ/YOLO-Depth-Estimation-for-Android
-    m_session = Ort::Session(s_OrtEnv, L".\\Data\\Model_Yolo_v9c_f16.onnx", sessionOptions);
+    try
+    {
+        if (model_path == nullptr)
+        {
 
+            // Create the session
+
+            //auto session = Ort::Session(s_OrtEnv, L"mobilenetv2-7-fp16.onnx", sessionOptions);
+            // model from here:
+            // https://github.com/DakeQQ/YOLO-Depth-Estimation-for-Android
+
+            //wchar_t * modelfile = L"Model_Yolo_v9c.ort";
+            //wchar_t* modelfile = L"Model_Yolo_v9c_f16.onnx";
+            //wchar_t* modelfile = L"Model_Yolo_v9c_f16_h1088_w1920.onnx";
+            //wchar_t* modelfile = L"yolov11_det.onnx";
+            //wchar_t* modelfile = L"yolo11n.onnx";
+            //wchar_t* modelfile = L"yolov10m.onnx";
+            wchar_t* modelfile = L"yolov8_det.onnx";
+
+            m_modelfile = std::wstring(modelfile);
+
+            std::wstring model_path = L".\\Data\\" + m_modelfile;
+            m_session = Ort::Session(s_OrtEnv, model_path.c_str(), sessionOptions);
+        }
+        else
+        {
+            const wchar_t* pstrName = wcsrchr(model_path, '\\');
+            if (!pstrName)
+            {
+                m_modelfile = std::wstring(model_path);
+            }
+            else
+            {
+                pstrName++;
+                m_modelfile = std::wstring(pstrName);
+            }
+
+            m_session = Ort::Session(s_OrtEnv, model_path, sessionOptions);
+        }
+        
+    }
+    catch (const std::runtime_error& re) {
+        std::cerr << "Runtime error: " << re.what() << std::endl;
+        exit(1);
+    }
+    catch (const std::exception& ex)
+    {
+        const char* err = ex.what();
+        MessageBoxA(0, err, "Error loading model", MB_YESNO);
+        std::cerr << "Error occurred: " << ex.what() << std::endl;
+        exit(1);
+    }
+  
     //const char* inputName = "images";
     //const char* outputName = "output0";
 
@@ -242,7 +294,8 @@ void Sample::InitializeDirectMLResources()
     Ort::Allocator allocator0(m_session, memoryInfo0);
     Ort::Allocator allocator(m_session, memoryInfo);
 
-   
+    auto meta = m_session.GetModelMetadata();
+    auto modelname = meta.GetGraphNameAllocated(allocator0);
 
     auto inputName = m_session.GetInputNameAllocated(0, allocator0);
     auto inputTypeInfo = m_session.GetInputTypeInfo(0);
@@ -261,6 +314,11 @@ void Sample::InitializeDirectMLResources()
     const size_t inputChannels = m_inputShape[m_inputShape.size() - 3];
     const size_t inputHeight = m_inputShape[m_inputShape.size() - 2];
     const size_t inputWidth = m_inputShape[m_inputShape.size() - 1];
+
+
+    m_inputWidth = inputWidth;
+    m_inputHeight = inputHeight;
+
     const size_t inputElementSize = m_inputDataType == ONNX_TENSOR_ELEMENT_DATA_TYPE_FLOAT ? sizeof(float) : sizeof(uint16_t);
 
     auto outputName = m_session.GetOutputNameAllocated(0, allocator0);
