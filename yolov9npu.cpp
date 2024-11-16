@@ -595,68 +595,103 @@ bool Sample::CopySharedVideoTextureTensor(std::vector<std::byte> & inputBuffer)
     return false;
 }
 
-//std::vector<std::byte*> Sample::ReadOutputTensors(std::vector< Ort::Value >& output_tensors)
-std::byte* Sample::ReadOutputTensors(Ort::Value & outputensor)
+void Sample::GetFaces(std::vector<const std::byte*>& outputData, std::vector<std::vector<int64_t>>& shapes)
 {
-    std::vector<std::byte*> outputData;
-    //for (auto& outputensor : output_tensors)
-    //{
-        // Read results
-        const auto memoryInfo = outputensor.GetTensorMemoryInfo();
-        Ort::Allocator allocator(m_session, memoryInfo);
+    if (outputData.size() != 2)
+        return;
 
-        ComPtr<ID3D12Resource> outputResource;
-        Ort::ThrowOnError(m_ortDmlApi->GetD3D12ResourceFromAllocation(allocator, outputensor.GetTensorMutableData<void*>(), &outputResource));
-        D3D12_RESOURCE_DESC resource_desc = outputResource->GetDesc();
-        //unsigned int* data;
-        //outputResource.Get()->Map(0, nullptr, reinterpret_cast<void**>(&data));
+    Vec3<float> value1((float*)outputData[0], shapes[0][0], shapes[0][1], shapes[0][2]);
+    Vec3<float> value2((float*)outputData[1], shapes[1][0], shapes[1][1], shapes[1][2]);
+ 
+    // Scale the boxes to be relative to the original image size
+    auto viewport = m_deviceResources->GetScreenViewport();
+    float xScale = (float)viewport.Width;
+    float yScale = (float)viewport.Height;
 
-        assert(resource_desc.Dimension == D3D12_RESOURCE_DIMENSION_BUFFER);
-        const size_t data_size_in_bytes = static_cast<size_t>(resource_desc.Width);
+    const float x_scale = (float)m_inputWidth;
+    const float y_scale = (float)m_inputHeight;
+    const float h_scale = (float)m_inputWidth;
+    const float w_scale = (float)m_inputHeight;
 
-        // Create intermediate upload resource visible to both CPU and GPU.
-        ComPtr<ID3D12Resource> download_buffer = CreateD3D12ResourceOfByteSize(m_d3dDevice.Get(), data_size_in_bytes, D3D12_HEAP_TYPE_READBACK, D3D12_RESOURCE_STATE_COPY_DEST, D3D12_RESOURCE_FLAG_NONE);
+    for (Size i = 0; i < value1.z; ++i)
+    {
+        for (Size j = 0; j < value1.y; ++j)
+        {
+            auto ptr2 = value2[i][j];
+            if (ptr2[0] < threshold) continue;
 
-        D3D12_RESOURCE_BARRIER resource_barrier = {};
-        resource_barrier.Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
-        resource_barrier.Flags = D3D12_RESOURCE_BARRIER_FLAG_NONE;
-        resource_barrier.Transition = {};
-        resource_barrier.Transition.pResource = outputResource.Get();
-        resource_barrier.Transition.Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
-        resource_barrier.Transition.StateBefore = D3D12_RESOURCE_STATE_UNORDERED_ACCESS;
-        resource_barrier.Transition.StateAfter = D3D12_RESOURCE_STATE_COPY_SOURCE;
+            auto ptr = value1[i][j];
 
-        // Copy GPU data into the download buffer.
-        m_commandList.Get()->ResourceBarrier(1, &resource_barrier);
-        m_commandList.Get()->CopyResource(download_buffer.Get(), outputResource.Get());
-        THROW_IF_FAILED(m_commandList.Get()->Close());
-        ID3D12CommandList* command_lists[] = { m_commandList.Get() };
-        m_commandQueue->ExecuteCommandLists(static_cast<uint32_t>(std::size(command_lists)), command_lists);
-        WaitForQueueToComplete(m_commandQueue.Get());
-        THROW_IF_FAILED(m_commandAllocator->Reset());
-        THROW_IF_FAILED(m_commandList->Reset(m_commandAllocator.Get(), nullptr));
+            Detection result;
+            result.x = ptr[0];
+            result.y = ptr[1];
+            result.w = ptr[2];
+            result.h = ptr[3];
+            result.index = -1; // face, no label
+            result.confidence = (float)ptr2[0];
 
-        // Copy from shared GPU/CPU memory to ordinary system RAM.
-        //size_t clamped_data_byte_size = std::min(data_size_in_bytes, destination_data.size());
-        std::byte* sourceData = nullptr;
-        D3D12_RANGE range = { 0, data_size_in_bytes };
-        THROW_IF_FAILED(download_buffer->Map(0, &range, reinterpret_cast<void**>(&sourceData)));
-        download_buffer->Unmap(0, nullptr);
+            result.x = result.x / x_scale * m_anchors[j].w + m_anchors[j].x_center;
+            result.y = result.y / y_scale * m_anchors[j].h + m_anchors[j].y_center;
 
-        std::byte* d = (std::byte * )malloc(data_size_in_bytes);
-        memcpy(d, sourceData, data_size_in_bytes);
+            result.h = result.h / h_scale * m_anchors[j].h;
+            result.w = result.w / w_scale * m_anchors[j].w;
 
-        return d;
-        //outputData.push_back(d);
-    //}
-    //return outputData;
-    return nullptr;
+            // We need to do some postprocessing on the raw values before we return them
+
+            // Convert x,y,w,h to xmin,ymin,xmax,ymax
+            
+            float xmin = result.x - result.w / 2;
+            float ymin = result.y - result.h / 2;
+            float xmax = result.x + result.w / 2;
+            float ymax = result.y + result.h / 2;
+
+            xmin *= xScale;
+            ymin *= yScale;
+            xmax *= xScale;
+            ymax *= yScale;
+
+            // Clip values out of range
+            xmin = std::clamp(xmin, 0.0f, (float)viewport.Width);
+            ymin = std::clamp(ymin, 0.0f, (float)viewport.Height);
+            xmax = std::clamp(xmax, 0.0f, (float)viewport.Width);
+            ymax = std::clamp(ymax, 0.0f, (float)viewport.Height);
+
+            // Discard invalid boxes
+            if (xmax <= xmin || ymax <= ymin || IsInfOrNan({ xmin, ymin, xmax, ymax }))
+            {
+                continue;
+            }
+
+            Prediction pred = {};
+            pred.xmin = xmin;
+            pred.ymin = ymin;
+            pred.xmax = xmax;
+            pred.ymax = ymax;
+            pred.score = result.confidence;
+            pred.predictedClass = result.index;
+
+            for (int i = 0; i < 6; i++)
+            {
+                float keypoint_x = ptr[4 + i * 2];
+                float keypoint_y = ptr[5 + i * 2];
+
+                float x = keypoint_x / x_scale * m_anchors[j].w + m_anchors[j].x_center;
+                float y = keypoint_y / y_scale * m_anchors[j].h + m_anchors[j].y_center;
+                x *= xScale;
+                y *= yScale;
+                pred.m_keypoints.push_back(std::pair<float, float>(x, y));
+            }
+
+            m_preds.emplace_back(pred);
+        }
+    }
+    // Apply NMS to select the best boxes
+    m_preds = ApplyNonMaximalSuppression(m_preds, YoloV4Constants::c_nmsThreshold);
 }
 
 
 void Sample::GetPredictions(std::vector<const std::byte*>& outputData, std::vector<std::vector<int64_t>>& shapes)
 {
-    //auto shape = m_outputShape;
     if (outputData.size() != 3)
         return;
 
@@ -664,20 +699,13 @@ void Sample::GetPredictions(std::vector<const std::byte*>& outputData, std::vect
     Vec2<float> value2((float*)outputData[1], shapes[1][0], shapes[1][1]);
     Vec2<float> value3((float*)outputData[2], shapes[2][0], shapes[2][1]);
 
-
     // Scale the boxes to be relative to the original image size
     auto viewport = m_deviceResources->GetScreenViewport();
     float xScale = (float)viewport.Width / m_inputWidth;
     float yScale = (float)viewport.Height / m_inputHeight;
 
-    //m_detections.resize(value.z);
-    m_preds.clear();
-
     for (Size i = 0; i < value1.z; ++i)
     {
-        //Detections& list = m_detections[i];
-        //list.clear();
-
         for (Size j = 0; j < value1.y; ++j)
         {
             auto ptr2 = value2[i][j];
@@ -730,35 +758,22 @@ void Sample::GetPredictions(std::vector<const std::byte*>& outputData, std::vect
     }
     // Apply NMS to select the best boxes
     m_preds = ApplyNonMaximalSuppression(m_preds, YoloV4Constants::c_nmsThreshold);
-
-
 }
 
 
 void Sample::GetPredictions(const std::byte *  outputData, std::vector<int64_t> & shape)
 {
-
-    //auto shape = m_outputShape;
-
     Vec3<float> value((float*)outputData, shape[0], shape[1], shape[2]);
-
 
     // Scale the boxes to be relative to the original image size
     auto viewport = m_deviceResources->GetScreenViewport();
     float xScale = (float)viewport.Width / YoloV4Constants::c_inputWidth;
     float yScale = (float)viewport.Height / YoloV4Constants::c_inputHeight;
 
-    //m_detections.resize(value.z);
-    m_preds.clear();
-
     for (Size i = 0; i < value.z; ++i)
     {
-        //Detections& list = m_detections[i];
-        //list.clear();
-
         for (Size j = 0; j < value.y; ++j)
         {
-
             auto ptr = value[i][j];
             if (ptr[4] < threshold) continue;
             Detection result;
@@ -1314,10 +1329,16 @@ void Sample::Render()
         {
             // Record start
             auto start = std::chrono::high_resolution_clock::now();
+            m_preds.clear();
 
             if (outputData.size() == 1)
                 GetPredictions(outputData[0], output_shapes[0]);
-            else
+            else if (outputData.size() == 2 && output_names[0] == "box_coords" && output_names[1] == "box_scores")
+            {
+                // mediapipe onnx model?
+                GetFaces(outputData, output_shapes);
+            }
+            else if (outputData.size() == 3)
                 GetPredictions(outputData, output_shapes);
 
             // Readback the raw data from the model, compute the model's predictions, and render the bounding boxes
@@ -1347,14 +1368,23 @@ void Sample::Render()
                 // Draw bounding box outlines
                 m_lineEffect->Apply(commandList);
                 m_lineBatch->Begin(commandList);
+                float label_height = 5.0f;
                 float dx = 5.0f;
+
                 for (auto& pred : m_preds)
                 {
+                    if (pred.predictedClass < 0)
+                    {
+                        label_height = 1.0f;
+                        dx = 2.0f;
+                    }
+
+
                     m_lineEffect->SetAlpha(0.75f /*pred.score / 5.0*/);
                    
                     //DirectX::XMVECTORF32 White = { { { 0.980392158f, 0.980392158f, 0.980392158f, 1.0f} } }; // #fafafa
                     //DirectX::XMVECTORF32 White = { { { .0f, 0.980392158f, .0f, 1.0f} } }; // #fafafa
-                    int col = colors[pred.predictedClass % 20];
+                    int col = colors[((pred.predictedClass < 0) ? 0 : pred.predictedClass) % 20];
                     DirectX::XMVECTORF32 White = { { { (col >> 16) / 255.0f, ((col >> 8) & 0xff) / 255.0f, (col&0xff)/255.0f, 1.0f} } }; // #fafafa
                     for (int i = 0; i < 2; i++)
                     {
@@ -1364,8 +1394,8 @@ void Sample::Render()
                         {
                             VertexPositionColor upperLeft(SimpleMath::Vector3(pred.xmin, pred.ymin, 0.f), White);
                             VertexPositionColor upperRight(SimpleMath::Vector3(pred.xmax, pred.ymin, 0.f), White);
-                            VertexPositionColor lowerRight(SimpleMath::Vector3(pred.xmax, pred.ymin + 5 * dx, 0.f), White);
-                            VertexPositionColor lowerLeft(SimpleMath::Vector3(pred.xmin, pred.ymin + 5 * dx, 0.f), White);
+                            VertexPositionColor lowerRight(SimpleMath::Vector3(pred.xmax, pred.ymin + label_height * dx, 0.f), White);
+                            VertexPositionColor lowerLeft(SimpleMath::Vector3(pred.xmin, pred.ymin + label_height * dx, 0.f), White);
                             m_lineBatch->DrawQuad(upperLeft, upperRight, lowerRight, lowerLeft);
                         }
 
@@ -1393,6 +1423,18 @@ void Sample::Render()
                         }
                     }
 
+                    for (auto p : pred.m_keypoints)
+                    {
+                        DirectX::XMVECTORF32 KeyColor = { {  {0.0f, 1.0f, .0f, 1.0f} } }; // # green
+                        float dx = 3.0f;
+                        VertexPositionColor upperLeft(SimpleMath::Vector3(p.first - dx, p.second - dx, 0.f), KeyColor);
+                        VertexPositionColor upperRight(SimpleMath::Vector3(p.first + dx, p.second - dx, 0.f), KeyColor);
+                        VertexPositionColor lowerRight(SimpleMath::Vector3(p.first + dx, p.second + dx, 0.f), KeyColor);
+                        VertexPositionColor lowerLeft(SimpleMath::Vector3(p.first - dx, p.second + dx, 0.f), KeyColor);
+                        m_lineBatch->DrawQuad(upperLeft, upperRight, lowerRight, lowerLeft);
+
+
+                    }
                     /*
                        VertexPositionColor upperLeft(SimpleMath::Vector3(pred.xmin, pred.ymin, 0.f), White);
                         VertexPositionColor upperRight(SimpleMath::Vector3(pred.xmax, pred.ymin, 0.f), White);
@@ -1415,14 +1457,17 @@ void Sample::Render()
                 m_spriteBatch->Begin(commandList);
                 for (const auto& pred : m_preds)
                 {
-                    const char* classText = YoloV4Constants::c_classes[pred.predictedClass];
-                    std::wstring classTextW(classText, classText + strlen(classText));
+                    if (pred.predictedClass >= 0)
+                    {
+                        const char* classText = YoloV4Constants::c_classes[pred.predictedClass];
+                        std::wstring classTextW(classText, classText + strlen(classText));
 
-                    // Render a drop shadow by drawing the text twice with a slight offset.
-                    DX::DrawControllerString(m_spriteBatch.get(), m_legendFont.get(), m_ctrlFont.get(),
-                        classTextW.c_str(), SimpleMath::Vector2(pred.xmin, pred.ymin - 1.5f*dx) + SimpleMath::Vector2(2.f, 2.f), SimpleMath::Vector4(0.0f, 0.0f, 0.0f, 0.25f));
-                    DX::DrawControllerString(m_spriteBatch.get(), m_legendFont.get(), m_ctrlFont.get(),
-                        classTextW.c_str(), SimpleMath::Vector2(pred.xmin, pred.ymin - 1.5f * dx), ATG::Colors::DarkGrey);
+                        // Render a drop shadow by drawing the text twice with a slight offset.
+                        DX::DrawControllerString(m_spriteBatch.get(), m_legendFont.get(), m_ctrlFont.get(),
+                            classTextW.c_str(), SimpleMath::Vector2(pred.xmin, pred.ymin - 1.5f * dx) + SimpleMath::Vector2(2.f, 2.f), SimpleMath::Vector4(0.0f, 0.0f, 0.0f, 0.25f));
+                        DX::DrawControllerString(m_spriteBatch.get(), m_legendFont.get(), m_ctrlFont.get(),
+                            classTextW.c_str(), SimpleMath::Vector2(pred.xmin, pred.ymin - 1.5f * dx), ATG::Colors::DarkGrey);
+                    }
                 }
                 m_spriteBatch->End();
 

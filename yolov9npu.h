@@ -8,7 +8,7 @@
 #include "DeviceResources.h"
 #include "StepTimer.h"
 #include "MediaEnginePlayer.h"
-
+#include "ssd_anchors.h"
 
 
 using UniqueNativePtr = std::unique_ptr<void, void (*)(void*)>;
@@ -195,7 +195,8 @@ struct Prediction
     float xmax;
     float ymax;
     float score;
-    uint32_t predictedClass;
+    int32_t predictedClass;
+    std::vector<std::pair<float, float> > m_keypoints;
 };
 
 // A basic sample implementation that creates a D3D12 device and
@@ -244,8 +245,6 @@ private:
     void CreateWindowSizeDependentResources();
 
     bool CopySharedVideoTextureTensor(std::vector<std::byte>& inputbuffer);
-    //std::vector<std::byte*> ReadOutputTensors(std::vector< Ort::Value > & output_tensors);
-    std::byte* ReadOutputTensors(Ort::Value & output_tensor);
 
     void InitializeDirectML(ID3D12Device1** d3dDeviceOut, ID3D12CommandQueue** commandQueueOut, IDMLDevice** dmlDeviceOut,
         ID3D12CommandAllocator** commandAllocatorOut,
@@ -266,9 +265,16 @@ private:
     // Given a raw output of the model, retrieves the predictions (a bounding box, detected class, and score) of the
     // model.
 
+    // objects
     void GetPredictions(const std::byte* outputData, std::vector<int64_t> & shape);
     void GetPredictions(std::vector<const std::byte*>& outputData, std::vector<std::vector<int64_t>>& shapes);
 
+    // faces
+    void GetFaces(std::vector<const std::byte*>& outputData, std::vector<std::vector<int64_t>>& shapes);
+    std::vector<onnxmediapipe::Anchor>              m_anchors;
+    
+
+    // 
     // Device resources
     std::unique_ptr<DX::DeviceResources>            m_deviceResources;
 

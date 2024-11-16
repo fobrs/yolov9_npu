@@ -10,6 +10,8 @@
 
 #include "TensorHelper.h"
 
+#include "ssd_anchors.h"
+
 using Microsoft::WRL::ComPtr;
 
 using namespace DirectX;
@@ -340,4 +342,39 @@ void Sample::InitializeDirectMLResources(wchar_t * model_path)
     const size_t outputHeight = m_outputShape[m_outputShape.size() - 2];
     const size_t outputWidth = m_outputShape[m_outputShape.size() - 1];
     const size_t outputElementSize = outputDataType == ONNX_TENSOR_ELEMENT_DATA_TYPE_FLOAT ? sizeof(float) : sizeof(uint16_t);   
+
+
+    // mediapipe face detection anchors
+    // Anchors generation
+  //https://github.com/google/mediapipe/blob/master/mediapipe/modules/face_detection/face_detection.pbtxt
+    {
+        onnxmediapipe::SsdAnchorsCalculatorOptions ssdAnchorsCalculatorOptions;
+        ssdAnchorsCalculatorOptions.input_size_height = (int32_t)128;
+        ssdAnchorsCalculatorOptions.input_size_width = (int32_t)128;
+        ssdAnchorsCalculatorOptions.min_scale = 0.1484375;
+        ssdAnchorsCalculatorOptions.max_scale = 0.75;
+        ssdAnchorsCalculatorOptions.anchor_offset_x = 0.5;
+        ssdAnchorsCalculatorOptions.anchor_offset_y = 0.5;
+        ssdAnchorsCalculatorOptions.aspect_ratios = { 1.0 };
+        ssdAnchorsCalculatorOptions.fixed_anchor_size = true;
+
+        //192x192 implies 'full range' face detection.
+        if ((inputHeight == 192) && (inputWidth == 192))
+        {
+            //https://github.com/google/mediapipe/blob/master/mediapipe/modules/face_detection/face_detection_full_range.pbtxt
+            ssdAnchorsCalculatorOptions.num_layers = 1;
+            ssdAnchorsCalculatorOptions.strides = { 4 };
+            ssdAnchorsCalculatorOptions.interpolated_scale_aspect_ratio = 0.0;
+        }
+        else
+        {
+            //https://github.com/google/mediapipe/blob/master/mediapipe/modules/face_detection/face_detection_short_range.pbtxt
+            ssdAnchorsCalculatorOptions.num_layers = 4;
+            ssdAnchorsCalculatorOptions.strides = { 8, 16, 16, 16 };
+            ssdAnchorsCalculatorOptions.interpolated_scale_aspect_ratio = 1.0;
+        }
+
+        m_anchors.clear();
+        onnxmediapipe::SsdAnchorsCalculator::GenerateAnchors(m_anchors, ssdAnchorsCalculatorOptions);
+    }
 }
