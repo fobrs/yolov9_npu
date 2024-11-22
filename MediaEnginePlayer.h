@@ -86,7 +86,7 @@ public:
 
     void SetSource(_In_z_ const wchar_t* sourceUri);
 
-    bool TransferFrame(HANDLE textureHandle, MFVideoNormalizedRect rect, RECT rcTarget);
+    bool TransferFrame(HANDLE textureHandle, MFVideoNormalizedRect rect, RECT rcTarget, LONGLONG& pts);
 
     // Callbacks
     void OnMediaEngineEvent(uint32_t meEvent) override;

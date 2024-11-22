@@ -9,10 +9,14 @@
 //--------------------------------------------------------------------------------------
 
 #include "pch.h"
+#include "resource.h"
+
 #include "yolov9npu.h"
 
 #include <wingdi.h>
 #include <commdlg.h >
+#include "FileDialog.h"
+
 using namespace DirectX;
 
 namespace
@@ -259,42 +263,39 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam)
         //ScreenToClient(hWnd, &p);
         GetClientRect(hWnd, &rect);
        
-
-
-        OPENFILENAME ofn;       // common dialog box structure
-        TCHAR szFile[260] = { 0 };       // if using TCHAR macros
-
-        // Initialize OPENFILENAME
-        ZeroMemory(&ofn, sizeof(ofn));
-        ofn.lStructSize = sizeof(ofn);
-        ofn.hwndOwner = hWnd;
-        ofn.lpstrFile = szFile;
-        ofn.nMaxFile = sizeof(szFile);
-        ofn.lpstrFilter = L"Video\0*.mp4;*.mkv\0Models\0*.onnx\0All\0*.*\0";
-        ofn.nFilterIndex = 1;
-        ofn.lpstrFileTitle = NULL;
-        ofn.nMaxFileTitle = 0;
-        ofn.lpstrInitialDir = NULL;
-        ofn.Flags = OFN_PATHMUSTEXIST | OFN_FILEMUSTEXIST;
+        std::wstring title = L"Open Video file";
+        std::wstring filename;
+        bool bVideo = true;
 
         // where did I click?
+        bool bAddModel = false;
         if (p.y > rect.top + ((rect.bottom - rect.top) * 9 / 10))
-            ofn.lpstrFilter = L"Onnx Models\0*.onnx\0All\0*.*\0";
-        else
-            ofn.lpstrFilter = L"Video\0*.mp4;*.mkv\0All\0*.*\0";
+        {
+            bVideo = false;
+            if ((GetAsyncKeyState(VK_CONTROL) & 0x8000) != 0)
+            {
+                title = L"Add ONNX model";
+                bAddModel = true;
+            }
+            else
+                 title = L"Open ONNX model";           
+        }
 
-        if (GetOpenFileName(&ofn) == TRUE)
+        auto hr = FileOpen(title, filename, bVideo, bAddModel);
+        if (hr == S_OK)
+        
+        //if (GetOpenFileName(&ofn) == TRUE)
         {
             //
             // use ofn.lpstrFile
             
-            if (wcsstr(ofn.lpstrFile, L".onnx") != 0)
+            if (!bVideo)
             {
-                sample->OnNewMopdel(ofn.lpstrFile);
+                sample->OnNewMopdel(filename.c_str(), bAddModel);
             }
             else
             {
-                sample->OnNewFile(ofn.lpstrFile);
+                sample->OnNewFile(filename.c_str());
             }          
         }
         else

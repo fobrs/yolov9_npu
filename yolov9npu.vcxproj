@@ -361,6 +361,7 @@ copy $(ProjectDir)data\. $(OutDir)data</Command>
   </ItemDefinitionGroup>
   <ItemGroup>
     <ClInclude Include="DeviceResources.h" />
+    <ClInclude Include="FileDialog.h" />
     <ClInclude Include="Kits\ATGTK\ATGColors.h" />
     <ClInclude Include="Kits\ATGTK\ControllerFont.h" />
     <ClInclude Include="Kits\ATGTK\d3dx12.h" />
@@ -368,6 +369,7 @@ copy $(ProjectDir)data\. $(OutDir)data</Command>
     <ClInclude Include="Kits\ATGTK\ReadData.h" />
     <ClInclude Include="MediaEnginePlayer.h" />
     <ClInclude Include="pch.h" />
+    <ClInclude Include="resource.h" />
     <ClInclude Include="ssd_anchors.h" />
     <ClInclude Include="StepTimer.h" />
     <ClInclude Include="TensorHelper.h" />
@@ -375,6 +377,7 @@ copy $(ProjectDir)data\. $(OutDir)data</Command>
   </ItemGroup>
   <ItemGroup>
     <ClCompile Include="DeviceResources.cpp" />
+    <ClCompile Include="FileDialog.cpp" />
     <ClCompile Include="Main.cpp" />
     <ClCompile Include="MediaEnginePlayer.cpp" />
     <ClCompile Include="pch.cpp">

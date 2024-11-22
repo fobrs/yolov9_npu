@@ -318,11 +318,10 @@ void MediaEnginePlayer::SetSource(_In_z_ const wchar_t* sourceUri)
     }
 }
 
-bool MediaEnginePlayer::TransferFrame(HANDLE textureHandle, MFVideoNormalizedRect rect, RECT rcTarget)
+bool MediaEnginePlayer::TransferFrame(HANDLE textureHandle, MFVideoNormalizedRect rect, RECT rcTarget, LONGLONG & pts)
 {
     if (m_mediaEngine != nullptr && m_isPlaying)
     {
-        LONGLONG pts;
         if (m_mediaEngine->OnVideoStreamTick(&pts) == S_OK)
         {
             ComPtr<ID3D11Texture2D> mediaTexture;

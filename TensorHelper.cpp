@@ -114,6 +114,14 @@ std::pair<Ort::Value, UniqueNativePtr> CreateDmlValue(
   ThrowOnFailed(queue->GetDevice(IID_PPV_ARGS(&device)));
 
   auto shape = tensor_info.GetShape();
+  for (int i = 0; i < shape.size(); i++)
+  {
+      if (i == 0 && shape[i] == -1)
+          shape[i] = 1;
+      if (i > 0 && shape[i] == -1)
+          shape[i] = 640;
+  }
+
   auto resource = CreateD3D12Resource(device.Get(), tensor_info.GetElementType(), shape, D3D12_HEAP_TYPE_DEFAULT);
   void* dmlAllocatorResource;
   Ort::ThrowOnError(ortDmlApi->CreateGPUAllocationFromD3DResource(resource.Get(), &dmlAllocatorResource));
