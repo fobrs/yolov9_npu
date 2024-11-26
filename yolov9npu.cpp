@@ -14,8 +14,13 @@
 
 #include "TensorExtents.h"
 #include "TensorHelper.h"
+#include "depixelator.h"
+#include "polypartition.h"
+#include "earcut.hpp"
+#include "Polyline2D.h"
 
-double threshold = .40;
+
+double threshold = .45;
 
 const wchar_t* c_videoPath = L"grca-grand-canyon-association-park-store_1280x720.mp4";
 const wchar_t* c_imagePath = L"grca-BA-bike-shop_1280x720.jpg";
@@ -38,6 +43,9 @@ namespace
  
     std::vector<uint8_t> LoadBGRAImage(const wchar_t* filename, uint32_t& width, uint32_t& height)
     {
+        width = 520;
+        height = 520;
+#if 0
         ComPtr<IWICImagingFactory> wicFactory;
         DX::ThrowIfFailed(CoCreateInstance(CLSID_WICImagingFactory2, nullptr, CLSCTX_INPROC_SERVER, IID_PPV_ARGS(&wicFactory)));
 
@@ -51,13 +59,16 @@ namespace
 
         WICPixelFormatGUID pixelFormat;
         DX::ThrowIfFailed(frame->GetPixelFormat(&pixelFormat));
+#else
+        WICPixelFormatGUID pixelFormat = GUID_WICPixelFormat32bppBGRA;
+#endif
 
         uint32_t rowPitch = width * sizeof(uint32_t);
         uint32_t imageSize = rowPitch * height;
 
         std::vector<uint8_t> image;
         image.resize(size_t(imageSize));
-
+#if 0
         if (memcmp(&pixelFormat, &GUID_WICPixelFormat32bppBGRA, sizeof(GUID)) == 0)
         {
             DX::ThrowIfFailed(frame->CopyPixels(nullptr, rowPitch, imageSize, reinterpret_cast<BYTE*>(image.data())));
@@ -78,6 +89,16 @@ namespace
                 WICBitmapDitherTypeErrorDiffusion, nullptr, 0, WICBitmapPaletteTypeMedianCut));
 
             DX::ThrowIfFailed(formatConverter->CopyPixels(nullptr, rowPitch, imageSize, reinterpret_cast<BYTE*>(image.data())));
+        }
+#endif
+        
+        BYTE* p = (BYTE *) image.data();
+        for (int i = 0; i < imageSize/4; i++)
+        {
+            p[0] = p[1] = p[2] = 0;
+            p[2] = 0;
+            p[3] = 0;
+            p += 4;
         }
 
         return image;
@@ -180,17 +201,279 @@ namespace
         os << std::forward<T>(arg);
         return Format(os, std::forward<Ts>(args)...);
     }
+    enum class ChannelOrder
+    {
+        RGB,
+        BGR,
+        M
+    };
+
+    template <typename T>
+    void CopyTensorToPixelsByte(
+        uint8_t * src,
+        uint8_t* dst,
+        uint32_t height,
+        uint32_t width,
+        uint32_t channels)
+    {
+        dml::Span<const T> srcT(reinterpret_cast<const T*>(src), height*width / sizeof(T));
+
+        for (size_t pixelIndex = 0; pixelIndex < height * width; pixelIndex++)
+        {
+            BYTE m = (BYTE)srcT[pixelIndex + 0 * height * width];
+            if (m)
+                volatile int a = 0;
+            dst[pixelIndex * channels + 0] = m;
+           
+        }
+    }
+
+
+    // Converts an NCHW tensor buffer (batch size 1) to a pixel buffer.
+// Source: buffer of RGB planes (CHW) using float32/float16 components.
+// Target: buffer of RGB pixels (HWC) using uint8 components.
+    template <typename T>
+    void CopyTensorToPixels(
+        const uint8_t * src,
+        uint8_t * dst,
+        uint32_t height,
+        uint32_t width,
+        uint32_t channels)
+    {
+        dml::Span<const T> srcT(reinterpret_cast<const T*>(src), (height*width) / sizeof(T));
+
+        for (size_t pixelIndex = 0; pixelIndex < height * width; pixelIndex++)
+        {
+            BYTE r = static_cast<BYTE>(std::max(0.0f, std::min(1.0f, (float)srcT[pixelIndex + 0 * height * width])) * 255.0f);
+            BYTE g = static_cast<BYTE>(std::max(0.0f, std::min(1.0f, (float)srcT[pixelIndex + 1 * height * width])) * 255.0f);
+            BYTE b = static_cast<BYTE>(std::max(0.0f, std::min(1.0f, (float)srcT[pixelIndex + 2 * height * width])) * 255.0f);
+
+            dst[pixelIndex * channels + 0] = b;
+            dst[pixelIndex * channels + 1] = g;
+            dst[pixelIndex * channels + 2] = r;
+            dst[pixelIndex * channels + 3] = 128;
+        }
+    }
+
+    void SaveNCHWBufferToImageFilename(
+        std::wstring_view filename,
+        uint8_t * tensorBuffer,
+        uint32_t bufferHeight,
+        uint32_t bufferWidth,
+        ONNXTensorElementDataType bufferDataType,
+        ChannelOrder bufferChannelOrder)
+    {
+        using Microsoft::WRL::ComPtr;
+
+        uint32_t bufferChannels = 0;
+        WICPixelFormatGUID desiredImagePixelFormat = GUID_WICPixelFormatDontCare;
+        switch (bufferChannelOrder)
+        {
+        case ChannelOrder::RGB:
+            bufferChannels = 3;
+            desiredImagePixelFormat = GUID_WICPixelFormat24bppRGB;
+            break;
+
+        case ChannelOrder::BGR:
+            bufferChannels = 3;
+            desiredImagePixelFormat = GUID_WICPixelFormat24bppBGR;
+            break;
+
+        case ChannelOrder::M:
+            bufferChannels = 1;
+            desiredImagePixelFormat = GUID_WICPixelFormat8bppGray;
+            break;
+
+        default:
+            throw std::invalid_argument("Unsupported channel order");
+        }
+
+        uint32_t outputBufferSizeInBytes = bufferChannels * bufferHeight * bufferWidth;
+        switch (bufferDataType)
+        {
+        case ONNX_TENSOR_ELEMENT_DATA_TYPE_FLOAT:
+            outputBufferSizeInBytes *= sizeof(float);
+            break;
+
+        case ONNX_TENSOR_ELEMENT_DATA_TYPE_FLOAT16:
+            outputBufferSizeInBytes *= sizeof(half_float::half);
+            break;
+
+        case ONNX_TENSOR_ELEMENT_DATA_TYPE_UINT8:
+        case ONNX_TENSOR_ELEMENT_DATA_TYPE_INT8:
+            outputBufferSizeInBytes *= 1;
+            break;
+
+        default:
+            throw std::invalid_argument("Unsupported data type");
+        }
+
+        std::vector<BYTE> pixelBuffer(outputBufferSizeInBytes);
+
+        switch (bufferDataType)
+        {
+        case ONNX_TENSOR_ELEMENT_DATA_TYPE_FLOAT:
+            CopyTensorToPixels<float>(tensorBuffer, pixelBuffer.data(), bufferHeight, bufferWidth, bufferChannels);
+            break;
+
+        case ONNX_TENSOR_ELEMENT_DATA_TYPE_FLOAT16:
+            CopyTensorToPixels<half_float::half>(tensorBuffer, pixelBuffer.data(), bufferHeight, bufferWidth, bufferChannels);
+            break;
+
+        case ONNX_TENSOR_ELEMENT_DATA_TYPE_UINT8:
+        case ONNX_TENSOR_ELEMENT_DATA_TYPE_INT8:
+            CopyTensorToPixelsByte<std::byte>(tensorBuffer, pixelBuffer.data(), bufferHeight, bufferWidth, bufferChannels);
+            break;
+
+        default:
+            throw std::invalid_argument("Unsupported data type");
+        }
+
+        ComPtr<IWICImagingFactory> wicFactory;
+        THROW_IF_FAILED(CoCreateInstance(
+            CLSID_WICImagingFactory,
+            nullptr,
+            CLSCTX_INPROC_SERVER,
+            IID_PPV_ARGS(&wicFactory)
+        ));
+
+        ComPtr<IWICBitmap> bitmap;
+        THROW_IF_FAILED(wicFactory->CreateBitmapFromMemory(
+            bufferWidth,
+            bufferHeight,
+            desiredImagePixelFormat,
+            bufferWidth * bufferChannels,
+            pixelBuffer.size(),
+            pixelBuffer.data(),
+            &bitmap
+        ));
+
+        ComPtr<IWICStream> stream;
+        THROW_IF_FAILED(wicFactory->CreateStream(&stream));
+        THROW_IF_FAILED(stream->InitializeFromFilename(filename.data(), GENERIC_WRITE));
+
+        ComPtr<IWICBitmapEncoder> encoder;
+        THROW_IF_FAILED(wicFactory->CreateEncoder(GUID_ContainerFormatPng, nullptr, &encoder));
+        THROW_IF_FAILED(encoder->Initialize(stream.Get(), WICBitmapEncoderNoCache));
+
+        ComPtr<IWICBitmapFrameEncode> frame;
+        ComPtr<IPropertyBag2> propertyBag;
+        THROW_IF_FAILED(encoder->CreateNewFrame(&frame, &propertyBag));
+        THROW_IF_FAILED(frame->Initialize(propertyBag.Get()));
+        THROW_IF_FAILED(frame->WriteSource(bitmap.Get(), nullptr));
+        THROW_IF_FAILED(frame->Commit());
+        THROW_IF_FAILED(encoder->Commit());
+    }
+
+    void SaveNCHWBufferToWICTexture(
+        uint8_t* tensorBuffer,
+        uint32_t bufferHeight,
+        uint32_t bufferWidth,
+        ONNXTensorElementDataType bufferDataType,
+        ChannelOrder bufferChannelOrder,
+        ComPtr<IWICBitmap>& bitmap
+        )
+    {
+        using Microsoft::WRL::ComPtr;
+
+        uint32_t bufferChannels = 0;
+        WICPixelFormatGUID desiredImagePixelFormat = GUID_WICPixelFormatDontCare;
+        switch (bufferChannelOrder)
+        {
+        case ChannelOrder::RGB:
+            bufferChannels = 3;
+            desiredImagePixelFormat = GUID_WICPixelFormat24bppRGB;
+            break;
+
+        case ChannelOrder::BGR:
+            bufferChannels = 3;
+            desiredImagePixelFormat = GUID_WICPixelFormat24bppBGR;
+            break;
+
+        case ChannelOrder::M:
+            bufferChannels = 1;
+            desiredImagePixelFormat = GUID_WICPixelFormat8bppGray;
+            break;
+
+        default:
+            throw std::invalid_argument("Unsupported channel order");
+        }
+
+        uint32_t outputBufferSizeInBytes = bufferChannels * bufferHeight * bufferWidth;
+        switch (bufferDataType)
+        {
+        case ONNX_TENSOR_ELEMENT_DATA_TYPE_FLOAT:
+            outputBufferSizeInBytes *= sizeof(float);
+            break;
+
+        case ONNX_TENSOR_ELEMENT_DATA_TYPE_FLOAT16:
+            outputBufferSizeInBytes *= sizeof(half_float::half);
+            break;
+
+        case ONNX_TENSOR_ELEMENT_DATA_TYPE_UINT8:
+        case ONNX_TENSOR_ELEMENT_DATA_TYPE_INT8:
+            outputBufferSizeInBytes *= 1;
+            break;
+
+        default:
+            throw std::invalid_argument("Unsupported data type");
+        }
+
+        std::vector<BYTE> pixelBuffer(outputBufferSizeInBytes);
+
+        switch (bufferDataType)
+        {
+        case ONNX_TENSOR_ELEMENT_DATA_TYPE_FLOAT:
+            CopyTensorToPixels<float>(tensorBuffer, pixelBuffer.data(), bufferHeight, bufferWidth, bufferChannels);
+            break;
+
+        case ONNX_TENSOR_ELEMENT_DATA_TYPE_FLOAT16:
+            CopyTensorToPixels<half_float::half>(tensorBuffer, pixelBuffer.data(), bufferHeight, bufferWidth, bufferChannels);
+            break;
+
+        case ONNX_TENSOR_ELEMENT_DATA_TYPE_UINT8:
+        case ONNX_TENSOR_ELEMENT_DATA_TYPE_INT8:
+            CopyTensorToPixelsByte<std::byte>(tensorBuffer, pixelBuffer.data(), bufferHeight, bufferWidth, bufferChannels);
+            break;
+
+        default:
+            throw std::invalid_argument("Unsupported data type");
+        }
+
+        ComPtr<IWICImagingFactory> wicFactory;
+        THROW_IF_FAILED(CoCreateInstance(
+            CLSID_WICImagingFactory,
+            nullptr,
+            CLSCTX_INPROC_SERVER,
+            IID_PPV_ARGS(&wicFactory)
+        ));
+
+        
+        THROW_IF_FAILED(wicFactory->CreateBitmapFromMemory(
+            bufferWidth,
+            bufferHeight,
+            desiredImagePixelFormat,
+            bufferWidth * bufferChannels,
+            pixelBuffer.size(),
+            pixelBuffer.data(),
+            &bitmap
+        ));
+
+    }
+
+
     inline unsigned char* pixel(unsigned char* Img, int i, int j, int width, int height, int bpp)
     {
         return (Img + ((i * width + j) * bpp));
     }
+
 
     // Converts a pixel buffer to an NCHW tensor (batch size 1).
     // Source: buffer of RGB pixels (HWC) using uint8 components.
     // Target: buffer of RGB planes (CHW) using float32/float16 components.
     template <typename T>
     void CopyPixelsToTensor(
-        byte*  src,
+        std::byte*  src,
         uint32_t srcWidth, uint32_t srcHeight, uint32_t rowPitch,
         dml::Span<std::byte> dst,
         uint32_t height,
@@ -203,7 +486,7 @@ namespace
 
         if (srcWidth != width || srcHeight != height)
         {
-            unsigned char* Img = src;
+            unsigned char* Img = (uint8_t*)src;
             float ScaledWidthRatio = srcWidth / (float)width;
             float ScaledHeightRatio = srcHeight / (float)height;
             uint32_t pixelIndex = 0;
@@ -256,20 +539,28 @@ namespace
         {
             double rs, gs, bs;
             rs = gs = bs = 0.0;
-            for (size_t pixelIndex = 0; pixelIndex < height * width; pixelIndex++)
+            size_t pixelIndex = 0;
+            for (size_t line = 0; line < height; line++)
             {
-                float b = static_cast<float>(src[pixelIndex * srcChannels + 0]) / 255.0f;
-                float g = static_cast<float>(src[pixelIndex * srcChannels + 1]) / 255.0f;
-                float r = static_cast<float>(src[pixelIndex * srcChannels + 2]) / 255.0f;
+                auto _src = src + line * rowPitch;
+                for (size_t x = 0; x < width; x++)
+                {
+                    float b = static_cast<float>(_src[x * srcChannels + 0]) / 255.0f;
+                    float g = static_cast<float>(_src[x * srcChannels + 1]) / 255.0f;
+                    float r = static_cast<float>(_src[x * srcChannels + 2]) / 255.0f;
 
-                //rs += r;
-                //gs += g;
-                //bs += b;
+                    //rs += r;
+                    //gs += g;
+                    //bs += b;
 
-                
-                dstT[pixelIndex + 0 * height * width] = r;
-                dstT[pixelIndex + 1 * height * width] = g;
-                dstT[pixelIndex + 2 * height * width] = b;
+
+                    dstT[pixelIndex + 0 * height * width] = r;
+                    dstT[pixelIndex + 1 * height * width] = g;
+                    dstT[pixelIndex + 2 * height * width] = b;
+
+                    pixelIndex++;
+
+                }
             }
 
             //rs /= height * width;
@@ -333,18 +624,14 @@ namespace
 
 
 
-    enum class ChannelOrder
-    {
-        RGB,
-        BGR,
-    };
+
 
    
 
 }
 
 
-bool Sample::CopySharedVideoTextureTensor(std::vector<std::byte> & inputBuffer)
+bool Sample::CopySharedVideoTextureTensor(std::vector<std::byte> & inputBuffer, Model_t * model)
 {
     // Record start
     auto start = std::chrono::high_resolution_clock::now();
@@ -435,10 +722,10 @@ bool Sample::CopySharedVideoTextureTensor(std::vector<std::byte> & inputBuffer)
             });
 
        
-     
-        const size_t inputChannels = m_inputShape[m_inputShape.size() - 3];
-        const size_t inputHeight = m_inputShape[m_inputShape.size() - 2];
-        const size_t inputWidth = m_inputShape[m_inputShape.size() - 1];
+      
+        const size_t inputChannels = model->m_inputShape[model->m_inputShape.size() - 3];
+        const size_t inputHeight = model->m_inputShape[model->m_inputShape.size() - 2];
+        const size_t inputWidth = model->m_inputShape[model->m_inputShape.size() - 1];
 
         if (desc.Width != inputWidth || desc.Height != inputHeight)
         {
@@ -474,11 +761,11 @@ bool Sample::CopySharedVideoTextureTensor(std::vector<std::byte> & inputBuffer)
             if (m_d2dContext.Get())
             {
                 ComPtr < IDXGISurface> surface;
-               
+
                 DX::ThrowIfFailed(
                     mediaTexture.As(&surface)
                 );
-               
+
                 ComPtr< ID2D1Bitmap1> bitmap;
                 m_d2dContext.Get()->CreateBitmapFromDxgiSurface(surface.Get(), NULL, bitmap.GetAddressOf());
 
@@ -488,9 +775,10 @@ bool Sample::CopySharedVideoTextureTensor(std::vector<std::byte> & inputBuffer)
 
                 scaleEffect->SetInput(0, bitmap.Get());
 
-               
+
                 D2D1_SCALE_INTERPOLATION_MODE interpolationMode = D2D1_SCALE_INTERPOLATION_MODE_HIGH_QUALITY_CUBIC;
-                scaleEffect->SetValue(D2D1_SCALE_PROP_SCALE, D2D1::Vector2F((float)inputWidth/(float)desc.Width, (float)inputHeight / (float)desc.Height));
+                //D2D1_SCALE_INTERPOLATION_MODE interpolationMode = D2D1_SCALE_INTERPOLATION_MODE_NEAREST_NEIGHBOR;
+                scaleEffect->SetValue(D2D1_SCALE_PROP_SCALE, D2D1::Vector2F((float)inputWidth / (float)desc.Width, (float)inputHeight / (float)desc.Height));
                 scaleEffect->SetValue(D2D1_SCALE_PROP_INTERPOLATION_MODE, reinterpret_cast<const BYTE*>(&interpolationMode), sizeof(D2D1_SCALE_INTERPOLATION_MODE)); // Set the interpolation mode.
 
                 ComPtr< ID2D1Image> image_out;
@@ -516,14 +804,14 @@ bool Sample::CopySharedVideoTextureTensor(std::vector<std::byte> & inputBuffer)
                 DX::ThrowIfFailed(
                     drawTexture.As(&drawSurface)
                 );
-               
+
                 ComPtr< ID2D1Bitmap1> drawBitmap;
                 m_d2dContext.Get()->CreateBitmapFromDxgiSurface(drawSurface.Get(), NULL, drawBitmap.GetAddressOf());
                 m_d2dContext.Get()->SetTarget(drawBitmap.Get());
 
                 // Draw the image into the device context. Output surface is set as the target of the device context.
                 m_d2dContext.Get()->BeginDraw();
-               
+
                 auto identityMat = D2D1::Matrix3x2F::Identity();
 
                 m_d2dContext.Get()->SetTransform(identityMat);     // Clear out any existing transform before drawing.
@@ -533,7 +821,7 @@ bool Sample::CopySharedVideoTextureTensor(std::vector<std::byte> & inputBuffer)
                 D2D1_TAG tag2;
                 auto hr = m_d2dContext.Get()->EndDraw(&tag1, &tag2);
                 m_d2dContext.Get()->SetTarget(nullptr);
-                 
+
 
                 // we have our scaled image in drawTexture
 
@@ -569,36 +857,327 @@ bool Sample::CopySharedVideoTextureTensor(std::vector<std::byte> & inputBuffer)
 
                 mappedTexture = std::move(stagingTexture);
                 mappedTexture->GetDesc(&desc);
-              
+
             }
 
         }
 
-       
-        switch (m_inputDataType)
+
+        switch (model->m_inputDataType)
         {
         case ONNX_TENSOR_ELEMENT_DATA_TYPE_FLOAT:
-            CopyPixelsToTensor<float>((byte*)mapInfo.pData, desc.Width, desc.Height, mapInfo.RowPitch, inputBuffer, inputHeight, inputWidth, inputChannels);
+            CopyPixelsToTensor<float>((std::byte*)mapInfo.pData, desc.Width, desc.Height, mapInfo.RowPitch, inputBuffer, inputHeight, inputWidth, inputChannels);
             break;
 
         case ONNX_TENSOR_ELEMENT_DATA_TYPE_FLOAT16:
-            CopyPixelsToTensor<half_float::half>((byte*)mapInfo.pData, desc.Width, desc.Height, mapInfo.RowPitch, inputBuffer, inputHeight, inputWidth, inputChannels);
+            CopyPixelsToTensor<half_float::half>((std::byte*)mapInfo.pData, desc.Width, desc.Height, mapInfo.RowPitch, inputBuffer, inputHeight, inputWidth, inputChannels);
             break;
 
         default:
             throw std::invalid_argument("Unsupported data type");
-        }   
+        }
+        
         auto end = std::chrono::high_resolution_clock::now();
-        m_copypixels_tensor_duration = end - start;
+        m_copypixels_tensor_duration += (end - start);
+
+#if 0
+        SaveNCHWBufferToImageFilename(
+            L"input.png",
+            (uint8_t*)(inputBuffer.data()),
+            inputHeight,
+            inputWidth,
+            model->m_inputDataType,
+            ChannelOrder::RGB);
+#endif
         return true;
     }
     return false;
 }
 
-void Sample::GetFaces(std::vector<const std::byte*>& outputData, std::vector<std::vector<int64_t>>& shapes)
+
+// Simple helper function to load an image into a DX12 texture with common settings
+// Returns true on success, with the SRV CPU handle having an SRV for the newly-created texture placed in it (srv_cpu_handle must be a handle in a valid descriptor heap)
+bool Sample::LoadTextureFromMemory(const std::byte * image_data, uint32_t width, uint32_t height, ID3D12Device* d3d_device, D3D12_CPU_DESCRIPTOR_HANDLE srv_cpu_handle, ID3D12Resource** out_tex_resource)
+{
+    // Load from disk into a raw RGBA buffer
+    int image_width = width;
+    int image_height = height;
+   
+
+
+    ID3D12InfoQueue* InfoQueue = nullptr;
+    d3d_device->QueryInterface(IID_PPV_ARGS(&InfoQueue));
+    if (InfoQueue) {
+        InfoQueue->SetBreakOnSeverity(D3D12_MESSAGE_SEVERITY_ERROR, true);
+        InfoQueue->SetBreakOnSeverity(D3D12_MESSAGE_SEVERITY_CORRUPTION, true);
+        InfoQueue->SetBreakOnSeverity(D3D12_MESSAGE_SEVERITY_WARNING, false);
+    }
+    // Create texture resource
+    D3D12_HEAP_PROPERTIES props;
+    memset(&props, 0, sizeof(D3D12_HEAP_PROPERTIES));
+    props.Type = D3D12_HEAP_TYPE_DEFAULT;
+    props.CPUPageProperty = D3D12_CPU_PAGE_PROPERTY_UNKNOWN;
+    props.MemoryPoolPreference = D3D12_MEMORY_POOL_UNKNOWN;
+
+    D3D12_RESOURCE_DESC desc;
+    ZeroMemory(&desc, sizeof(desc));
+    desc.Dimension = D3D12_RESOURCE_DIMENSION_TEXTURE2D;
+    desc.Alignment = 0;
+    desc.Width = image_width;
+    desc.Height = image_height;
+    desc.DepthOrArraySize = 1;
+    desc.MipLevels = 1;
+    desc.Format = DXGI_FORMAT_R8G8B8A8_UNORM;
+    desc.SampleDesc.Count = 1;
+    desc.SampleDesc.Quality = 0;
+    desc.Layout = D3D12_TEXTURE_LAYOUT_UNKNOWN;
+    desc.Flags = D3D12_RESOURCE_FLAG_NONE;
+
+    ID3D12Resource* pTexture = NULL;
+    d3d_device->CreateCommittedResource(&props, D3D12_HEAP_FLAG_NONE, &desc,
+        D3D12_RESOURCE_STATE_COPY_DEST, NULL, IID_PPV_ARGS(&pTexture));
+
+    // Create a temporary upload resource to move the data in
+    UINT uploadPitch = (image_width * 4 + D3D12_TEXTURE_DATA_PITCH_ALIGNMENT - 1u) & ~(D3D12_TEXTURE_DATA_PITCH_ALIGNMENT - 1u);
+    UINT uploadSize = image_height * uploadPitch;
+    desc.Dimension = D3D12_RESOURCE_DIMENSION_BUFFER;
+    desc.Alignment = 0;
+    desc.Width = uploadSize;
+    desc.Height = 1;
+    desc.DepthOrArraySize = 1;
+    desc.MipLevels = 1;
+    desc.Format = DXGI_FORMAT_UNKNOWN;
+    desc.SampleDesc.Count = 1;
+    desc.SampleDesc.Quality = 0;
+    desc.Layout = D3D12_TEXTURE_LAYOUT_ROW_MAJOR;
+    desc.Flags = D3D12_RESOURCE_FLAG_NONE;
+
+    props.Type = D3D12_HEAP_TYPE_UPLOAD;
+    props.CPUPageProperty = D3D12_CPU_PAGE_PROPERTY_UNKNOWN;
+    props.MemoryPoolPreference = D3D12_MEMORY_POOL_UNKNOWN;
+
+    ID3D12Resource* uploadBuffer = NULL;
+    HRESULT hr = d3d_device->CreateCommittedResource(&props, D3D12_HEAP_FLAG_NONE, &desc,
+        D3D12_RESOURCE_STATE_GENERIC_READ, NULL, IID_PPV_ARGS(&uploadBuffer));
+
+    DX::ThrowIfFailed(hr);
+
+    // Write pixels into the upload resource
+    void* mapped = NULL;
+    D3D12_RANGE range = { 0, uploadSize };
+    hr = uploadBuffer->Map(0, &range, &mapped);
+
+    DX::ThrowIfFailed(hr);
+    for (int y = 0; y < image_height; y++)
+    {
+       // memcpy((void*)((uintptr_t)mapped + y * uploadPitch), image_data + y * image_width * 4, image_width * 4);
+    }
+    uploadBuffer->Unmap(0, &range);
+
+
+    // Copy the upload resource content into the real resource
+    D3D12_TEXTURE_COPY_LOCATION srcLocation = {};
+    srcLocation.pResource = uploadBuffer;
+    srcLocation.Type = D3D12_TEXTURE_COPY_TYPE_PLACED_FOOTPRINT;
+    srcLocation.PlacedFootprint.Footprint.Format = DXGI_FORMAT_R8G8B8A8_UNORM;
+    srcLocation.PlacedFootprint.Footprint.Width = image_width;
+    srcLocation.PlacedFootprint.Footprint.Height = image_height;
+    srcLocation.PlacedFootprint.Footprint.Depth = 1;
+    srcLocation.PlacedFootprint.Footprint.RowPitch = uploadPitch;
+
+    D3D12_TEXTURE_COPY_LOCATION dstLocation = {};
+    dstLocation.pResource = pTexture;
+    dstLocation.Type = D3D12_TEXTURE_COPY_TYPE_SUBRESOURCE_INDEX;
+    dstLocation.SubresourceIndex = 0;
+
+    D3D12_RESOURCE_BARRIER barrier = {};
+    barrier.Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
+    barrier.Flags = D3D12_RESOURCE_BARRIER_FLAG_NONE;
+    barrier.Transition.pResource = pTexture;
+    barrier.Transition.Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
+    barrier.Transition.StateBefore = D3D12_RESOURCE_STATE_COPY_DEST;
+    barrier.Transition.StateAfter = D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE;
+
+    // Create a temporary command queue to do the copy with
+    ID3D12Fence* fence = NULL;
+    hr = d3d_device->CreateFence(0, D3D12_FENCE_FLAG_NONE, IID_PPV_ARGS(&fence));
+    DX::ThrowIfFailed(hr);
+
+    HANDLE event = CreateEvent(0, 0, 0, 0);
+    //IM_ASSERT(event != NULL);
+
+    D3D12_COMMAND_QUEUE_DESC queueDesc = {};
+    queueDesc.Type = D3D12_COMMAND_LIST_TYPE_DIRECT;
+    queueDesc.Flags = D3D12_COMMAND_QUEUE_FLAG_NONE;
+    queueDesc.NodeMask = 1;
+
+    ID3D12CommandQueue* cmdQueue = NULL;
+    hr = d3d_device->CreateCommandQueue(&queueDesc, IID_PPV_ARGS(&cmdQueue));
+    DX::ThrowIfFailed(hr);
+
+    ID3D12CommandAllocator* cmdAlloc = NULL;
+    hr = d3d_device->CreateCommandAllocator(D3D12_COMMAND_LIST_TYPE_DIRECT, IID_PPV_ARGS(&cmdAlloc));
+    DX::ThrowIfFailed(hr);
+
+    ID3D12GraphicsCommandList* cmdList = NULL;
+    hr = d3d_device->CreateCommandList(0, D3D12_COMMAND_LIST_TYPE_DIRECT, cmdAlloc, NULL, IID_PPV_ARGS(&cmdList));
+    DX::ThrowIfFailed(hr);
+
+    //auto cmdList = m_deviceResources->GetCommandList();
+
+    cmdList->CopyTextureRegion(&dstLocation, 0, 0, 0, &srcLocation, NULL);
+    cmdList->ResourceBarrier(1, &barrier);
+
+    hr = cmdList->Close();
+    DX::ThrowIfFailed(hr);
+
+    // Execute the copy
+    cmdQueue->ExecuteCommandLists(1, (ID3D12CommandList* const*)&cmdList);
+    hr = cmdQueue->Signal(fence, 1);
+    DX::ThrowIfFailed((hr));
+
+    // Wait for everything to complete
+    fence->SetEventOnCompletion(1, event);
+    WaitForSingleObject(event, INFINITE);
+
+    // Tear down our temporary command queue and release the upload resource
+    cmdList->Release();
+    cmdAlloc->Release();
+    cmdQueue->Release();
+    CloseHandle(event);
+    fence->Release();
+    uploadBuffer->Release();
+
+    if (InfoQueue)
+        InfoQueue->Release();
+
+    // Create a shader resource view for the texture
+    D3D12_SHADER_RESOURCE_VIEW_DESC srvDesc;
+    ZeroMemory(&srvDesc, sizeof(srvDesc));
+    srvDesc.Format = DXGI_FORMAT_R8G8B8A8_UNORM;
+    srvDesc.ViewDimension = D3D12_SRV_DIMENSION_TEXTURE2D;
+    srvDesc.Texture2D.MipLevels = desc.MipLevels;
+    srvDesc.Texture2D.MostDetailedMip = 0;
+    srvDesc.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
+    d3d_device->CreateShaderResourceView(pTexture, &srvDesc, srv_cpu_handle);
+
+    // Return results
+    *out_tex_resource = pTexture;
+    return true;
+}
+
+void Sample::GetMask(const std::byte* outputData, std::vector<int64_t>& shape, Model_t* model, ONNXTensorElementDataType outputDataType)
+{
+    if (shape.size() != 3)
+        return;
+
+    const uint32_t outputChannels = 1;
+    const uint32_t outputHeight = shape[shape.size() - 2];
+    const uint32_t outputWidth = shape[shape.size() - 1];
+    uint32_t outputElementSize = 1;
+    auto co = ChannelOrder::RGB;
+    switch (outputDataType)
+    {
+        case ONNX_TENSOR_ELEMENT_DATA_TYPE_FLOAT:
+            outputElementSize = sizeof(float);
+            break;
+
+        case ONNX_TENSOR_ELEMENT_DATA_TYPE_FLOAT16:
+            outputElementSize = sizeof(uint16_t);
+            break;
+        case ONNX_TENSOR_ELEMENT_DATA_TYPE_UINT8:
+        case ONNX_TENSOR_ELEMENT_DATA_TYPE_INT8:
+            outputElementSize = sizeof(uint8_t);
+            co = ChannelOrder::M;
+            break;
+    }
+
+    // convert mask to BGRA data
+    if (m_mask.size() != outputWidth * outputHeight * 4)
+        m_mask.resize(outputWidth * outputHeight * 4);
+
+    m_mask_ready = true;
+    m_mask_width = outputWidth;
+    m_mask_height = outputHeight;
+
+    int channels = 4;
+    for (size_t pixelIndex = 0; pixelIndex < outputHeight * outputWidth; pixelIndex++)
+    {
+        BYTE m = (BYTE)outputData[pixelIndex + 0 * outputWidth * outputHeight];
+        if (m)
+            volatile int a = 0;
+        m = m % sizeof(colors);
+
+        m_mask[pixelIndex * channels + 0] = (uint8_t) ((colors[m] & 0xff0000) >> 16);
+        m_mask[pixelIndex * channels + 1] = (uint8_t) ((colors[m] & 0xff00) >> 8);
+        m_mask[pixelIndex * channels + 2] = (uint8_t) (colors[m] & 0xff);
+        m_mask[pixelIndex * channels + 3] = (uint8_t)0x80;
+    }
+}
+
+
+void Sample::GetImage(const std::byte* outputData, std::vector<int64_t>& shape, Model_t* model, ONNXTensorElementDataType outputDataType)
+{
+    if (shape.size() != 4)
+        return;
+
+    const uint32_t outputChannels = shape[shape.size() - 3];
+    const uint32_t outputHeight = shape[shape.size() - 2];
+    const uint32_t outputWidth = shape[shape.size() - 1];
+    uint32_t outputElementSize = outputDataType == ONNX_TENSOR_ELEMENT_DATA_TYPE_FLOAT ? sizeof(float) : sizeof(uint16_t);
+
+    auto co = ChannelOrder::RGB;
+    switch (outputDataType)
+    {
+    case ONNX_TENSOR_ELEMENT_DATA_TYPE_FLOAT:
+        outputElementSize = sizeof(float);
+        break;
+
+    case ONNX_TENSOR_ELEMENT_DATA_TYPE_FLOAT16:
+        outputElementSize = sizeof(uint16_t);
+        break;
+    case ONNX_TENSOR_ELEMENT_DATA_TYPE_UINT8:
+    case ONNX_TENSOR_ELEMENT_DATA_TYPE_INT8:
+        outputElementSize = sizeof(uint8_t);
+        co = ChannelOrder::M;
+        break;
+    }
+    int channels = 4;
+    // convert mask to BGRA data
+    if (m_mask.size() != outputWidth * outputHeight * channels)
+        m_mask.resize(outputWidth * outputHeight * channels);
+
+    m_mask_ready = true;
+    m_mask_width = outputWidth;
+    m_mask_height = outputHeight;
+
+    switch (outputDataType)
+    {
+    case ONNX_TENSOR_ELEMENT_DATA_TYPE_FLOAT:
+        CopyTensorToPixels<float>((uint8_t*)outputData, m_mask.data(), outputHeight, outputWidth, channels);
+        break;
+
+    case ONNX_TENSOR_ELEMENT_DATA_TYPE_FLOAT16:
+        CopyTensorToPixels<half_float::half>((uint8_t*)outputData, m_mask.data(), outputHeight, outputWidth, channels);
+        break;
+
+    case ONNX_TENSOR_ELEMENT_DATA_TYPE_UINT8:
+    case ONNX_TENSOR_ELEMENT_DATA_TYPE_INT8:
+        CopyTensorToPixelsByte<std::byte>((uint8_t*)outputData, m_mask.data(), outputHeight, outputWidth, channels);
+        break;
+
+    default:
+        throw std::invalid_argument("Unsupported data type");
+    }
+
+}
+
+
+void Sample::GetFaces(std::vector<const std::byte*>& outputData, std::vector<std::vector<int64_t>>& shapes, Model_t* model)
 {
     if (outputData.size() != 2)
         return;
+
 
     Vec3<float> value1((float*)outputData[0], shapes[0][0], shapes[0][1], shapes[0][2]);
     Vec3<float> value2((float*)outputData[1], shapes[1][0], shapes[1][1], shapes[1][2]);
@@ -608,14 +1187,23 @@ void Sample::GetFaces(std::vector<const std::byte*>& outputData, std::vector<std
     float xScale = (float)viewport.Width;
     float yScale = (float)viewport.Height;
 
-    const float x_scale = (float)m_inputWidth;
-    const float y_scale = (float)m_inputHeight;
-    const float h_scale = (float)m_inputWidth;
-    const float w_scale = (float)m_inputHeight;
+    const float x_scale = (float)model->m_inputWidth;
+    const float y_scale = (float)model->m_inputHeight;
+    const float h_scale = (float)model->m_inputWidth;
+    const float w_scale = (float)model->m_inputHeight;
 
+    Anchors * _anchors =  &m_anchors[0];
+    if (value1.y != _anchors->size())
+        _anchors = &m_anchors[1];
+    if (value1.y != _anchors->size())
+    {
+        MessageBox(0, L"anchors size error", L"Error", MB_OK);
+        ExitProcess(1);
+    }
+    const Anchors& anchors = *_anchors;
     for (Size i = 0; i < value1.z; ++i)
     {
-        for (Size j = 0; j < value1.y; ++j)
+        for (Size j = 0; j < value1.y;++j)
         {
             auto ptr2 = value2[i][j];
             if (ptr2[0] < threshold) continue;
@@ -630,11 +1218,11 @@ void Sample::GetFaces(std::vector<const std::byte*>& outputData, std::vector<std
             result.index = -1; // face, no label
             result.confidence = (float)ptr2[0];
 
-            result.x = result.x / x_scale * m_anchors[j].w + m_anchors[j].x_center;
-            result.y = result.y / y_scale * m_anchors[j].h + m_anchors[j].y_center;
+            result.x = result.x / x_scale * anchors[j].w + anchors[j].x_center;
+            result.y = result.y / y_scale * anchors[j].h + anchors[j].y_center;
 
-            result.h = result.h / h_scale * m_anchors[j].h;
-            result.w = result.w / w_scale * m_anchors[j].w;
+            result.h = result.h / h_scale * anchors[j].h;
+            result.w = result.w / w_scale * anchors[j].w;
 
             // We need to do some postprocessing on the raw values before we return them
 
@@ -675,8 +1263,8 @@ void Sample::GetFaces(std::vector<const std::byte*>& outputData, std::vector<std
                 float keypoint_x = ptr[4 + i * 2];
                 float keypoint_y = ptr[5 + i * 2];
 
-                float x = keypoint_x / x_scale * m_anchors[j].w + m_anchors[j].x_center;
-                float y = keypoint_y / y_scale * m_anchors[j].h + m_anchors[j].y_center;
+                float x = keypoint_x / x_scale * anchors[j].w + anchors[j].x_center;
+                float y = keypoint_y / y_scale * anchors[j].h + anchors[j].y_center;
                 x *= xScale;
                 y *= yScale;
                 pred.m_keypoints.push_back(std::pair<float, float>(x, y));
@@ -689,45 +1277,100 @@ void Sample::GetFaces(std::vector<const std::byte*>& outputData, std::vector<std
     m_preds = ApplyNonMaximalSuppression(m_preds, YoloV4Constants::c_nmsThreshold);
 }
 
+void transpose(float* src, float* dst, const int N, const int M) {
+//#pragma omp parallel for
+    for (int n = 0; n < N * M; n++) {
+        int i = n / N;
+        int j = n % N;
+        dst[n] = src[M * j + i];
+    }
+};
 
-void Sample::GetPredictions(std::vector<const std::byte*>& outputData, std::vector<std::vector<int64_t>>& shapes)
+void Sample::GetPredictions2(std::vector<const std::byte*>& outputData, std::vector<std::vector<int64_t>>& shapes, const std::vector<std::string>& output_names, Model_t* model)
 {
-    if (outputData.size() != 3)
+    if (outputData.size() != 2)
+        return;
+    // get outpunt indices
+    int output0_i = 0;
+    int output1_i = 1;
+   
+    int i = 0;
+    for (auto name : output_names)
+    {
+        if (name == "output0")
+            output0_i = i;
+        else if (name == "output0")
+            output0_i = i;
+       
+        i++;
+    }
+    if (output0_i == -1 || output1_i == -1)
         return;
 
-    Vec3<float> value1((float*)outputData[0], shapes[0][0], shapes[0][1], shapes[0][2]);
-    Vec2<float> value2((float*)outputData[1], shapes[1][0], shapes[1][1]);
-    Vec2<float> value3((float*)outputData[2], shapes[2][0], shapes[2][1]);
+    Vec3<float> value1((float*)outputData[output0_i], shapes[output0_i][0], shapes[output0_i][1], shapes[output0_i][2]);
+    Vec4<float> value2((float*)outputData[output1_i], shapes[output1_i][0], shapes[output1_i][1], shapes[output1_i][2], shapes[output1_i][3]);
+    std::vector<float> out;
+    out.resize(value1.x * value1.y);
+
+    //transpose((float*)outputData[0], (float*)out.data(), value1.y, value1.x);
 
     // Scale the boxes to be relative to the original image size
     auto viewport = m_deviceResources->GetScreenViewport();
-    float xScale = (float)viewport.Width / m_inputWidth;
-    float yScale = (float)viewport.Height / m_inputHeight;
+    float xScale = (float)viewport.Width / model->m_inputWidth;
+    float yScale = (float)viewport.Height / model->m_inputHeight;
+
+
+    std::vector<int> class_ids;
+    std::vector<float> accus;
+    std::vector<Detection> boxes;
 
     for (Size i = 0; i < value1.z; ++i)
     {
-        for (Size j = 0; j < value1.y; ++j)
+        for (Size j = 0; j < value1.x; ++j)
         {
-            auto ptr2 = value2[i][j];
-            if (ptr2 < threshold) continue;
+            int classes = value1.y - 32 - 4;
+            float max_confidence = 0.0f;
+            int max_confidence_class = -1;
+            if (classes >  1)
+            {
+                //auto ptr = value1[i][j];
+                max_confidence = 0.0f;
+                max_confidence_class = -1;
 
-            auto ptr = value1[i][j];
-           
+                for (int c = 4; c < classes + 4; c++)
+                {
+                    float conf = value1[i][c][j];
+                    if (conf > max_confidence)
+                    {
+                        max_confidence = conf;
+                        max_confidence_class = c - 4;
+                    }
+                }
+            }
+            else if (classes == 1)
+            {
+                max_confidence = value1[i][4][j];
+                max_confidence_class = 0;
+            }
+          
+
+            if (max_confidence < threshold) continue;
+
             Detection result;
-            result.x = ptr[0];
-            result.y = ptr[1];
-            result.w = ptr[2];
-            result.h = ptr[3];
-            result.index = (Size)value3[i][j];
-            result.confidence = (float)ptr2;
+            result.x = value1[i][0][j];
+            result.y = value1[i][1][j];
+            result.w = value1[i][2][j];
+            result.h = value1[i][3][j];
+            result.index = max_confidence_class;
+            result.confidence = max_confidence;
 
             // We need to do some postprocessing on the raw values before we return them
 
             // Convert x,y,w,h to xmin,ymin,xmax,ymax
-            float xmin = result.x;
-            float ymin = result.y;
-            float xmax = result.w;
-            float ymax = result.h;
+            float xmin = result.x - result.w / 2.0f;
+            float ymin = result.y - result.h / 2.0f;
+            float xmax = result.x + result.w / 2.0f;
+            float ymax = result.y + result.h / 2.0f;
 
             xmin *= xScale;
             ymin *= yScale;
@@ -753,15 +1396,313 @@ void Sample::GetPredictions(std::vector<const std::byte*>& outputData, std::vect
             pred.ymax = ymax;
             pred.score = result.confidence;
             pred.predictedClass = result.index;
+            pred.i = i;
+            pred.j = j;
+
+            m_preds.push_back(pred);
+
+            accus.push_back(result.confidence);
+            class_ids.push_back(result.index);
+
+        }
+    }
+    // Apply NMS to select the best boxes
+    m_preds = ApplyNonMaximalSuppression(m_preds, YoloV4Constants::c_nmsThreshold);
+
+   // return;
+    // convert mask to BGRA data
+    if (m_mask.size() != value2.y * value2.x * 4)
+        m_mask.resize(value2.y * value2.x * 4);
+    std::fill(m_mask.begin(), m_mask.end(), 0);
+    m_mask_ready = true;
+    m_mask_width = value2.y;
+    m_mask_height = value2.x;
+    int channels = 4;
+
+    if (m_pred_mask.size() != value2.y * value2.x)
+        m_pred_mask.resize(value2.y * value2.x);
+
+
+    xScale = (float)viewport.Width / value2.x;
+    yScale = (float)viewport.Height / value2.y;
+
+    int start_mask_index = value1.y - 32;
+   
+
+    for (auto& pred : m_preds)
+    {
+        std::fill(m_pred_mask.begin(), m_pred_mask.end(), 0);
+
+        pred.mask_weights.resize(value2.z);
+        for (Size k = start_mask_index; k < value1.y; ++k)
+            pred.mask_weights[k- start_mask_index] = value1[pred.i][k][pred.j];
+
+        for (Size i = 0; i < value2.w; ++i)
+        {
+            int pixelIndex = 0;
+            for (Size k = 0; k < value2.y; ++k)
+            {
+
+                for (Size l = 0; l < value2.x; ++l)
+                {
+
+                    // inside bbox?
+                    // 
+                    float y = k * yScale;
+                    float x = l * xScale;
+
+                    if (x >= pred.xmin && x <= pred.xmax && y >= pred.ymin && y <= pred.ymax)
+                    {
+                        // for classes
+                        float sum = 0.0f;
+                        for (Size j = 0; j < value2.z; ++j)
+                        {
+                            auto v = value2[i][j][k][l];
+                            sum += pred.mask_weights[j] * v;
+                        }
+
+
+                        sum = sum / (1.0f + exp(-sum));
+                        BYTE m = 0;
+                        if (sum > 0.001)
+                        {
+
+                            m_pred_mask[k * value2.x + l] = 1;
+                            
+                            m = pred.predictedClass % 20;
+                            m_mask[pixelIndex * channels + 0] = (uint8_t)(colors[m] & 0xff);
+                            m_mask[pixelIndex * channels + 1] = (uint8_t)((colors[m] & 0xff00) >> 8);
+                            m_mask[pixelIndex * channels + 2] = (uint8_t)((colors[m] & 0xff0000) >> 16);
+                            m_mask[pixelIndex * channels + 3] = (uint8_t)0x80;
+                        }
+
+                    }
+                    pixelIndex++;
+                }
+            }
+        }
+        // get contour from m_pred_mask
+        depixelator::Bitmap bmap;
+        bmap.data = m_pred_mask.data();
+        bmap.height = m_mask_height;
+        bmap.width = m_mask_width;
+        bmap.stride = m_mask_width;
+        pred.m_polylines = depixelator::findContours(bmap);
+        //pred.m_polylines = depixelator::simplify(pred.m_polylines, 0.1f);
+        //pred.m_polylines = depixelator::simplifyRDP(pred.m_polylines, 0.1f);
+        pred.m_polylines = depixelator::traceSlopes(pred.m_polylines);
+        pred.m_polylines = depixelator::smoothen(pred.m_polylines, 0.1f, 4);
+
+        for (auto& polyline : pred.m_polylines)
+        {
+            for (auto& p : polyline)
+            {
+                p.x *= xScale, p.y *= yScale;
+            }
+        }
+    }
+}
+
+
+void Sample::GetPredictions(std::vector<const std::byte*>& outputData, std::vector<std::vector<int64_t>>& shapes, const std::vector<std::string>& output_names, Model_t* model)
+{
+    // get outpunt indices
+    int boxes_i = -0;
+    int scores_i = -1;
+    int class_idx_i = -1;
+    int masks_i = -1;
+    int protos_i = -1;
+    int i = 0;
+    for (auto name : output_names)
+    {
+        if (name == "boxes")
+            boxes_i = i;
+        else if (name == "scores")
+            scores_i = i;
+        else if (name == "class_idx")
+            class_idx_i = i;
+        else if (name == "masks")
+            masks_i = i;
+        else if (name == "protos")
+            protos_i = i;
+        i++;
+    }
+    if (boxes_i == -1 || scores_i == -1 || class_idx_i == -1)
+        return;
+    if (outputData.size() >= 5)
+    {
+        if (masks_i == -1 || protos_i == -1)
+            return;
+    }
+
+
+    Vec3<float> value1((float*)outputData[boxes_i], shapes[boxes_i][0], shapes[boxes_i][1], shapes[boxes_i][2]);
+    Vec2<float> value2((float*)outputData[scores_i], shapes[scores_i][0], shapes[scores_i][1]);
+    Vec2<float> value3((float*)outputData[class_idx_i], shapes[class_idx_i][0], shapes[class_idx_i][1]);
+ 
+    // Scale the boxes to be relative to the original image size
+    auto viewport = m_deviceResources->GetScreenViewport();
+    float xScale = (float)viewport.Width / model->m_inputWidth;
+    float yScale = (float)viewport.Height / model->m_inputHeight;
+
+    for (Size i = 0; i < value1.z; ++i)
+    {
+        for (Size j = 0; j < value1.y; ++j)
+        {
+            auto ptr2 = value2[i][j];
+            if (ptr2 < threshold) continue;
+
+            auto ptr = value1[i][j];
+           
+            Detection result;
+            result.x = ptr[0];
+            result.y = ptr[1];
+            result.w = ptr[2];
+            result.h = ptr[3];
+            result.index = (Size)value3[i][j];
+            result.confidence = (float)ptr2;
+
+            // We need to do some postprocessing on the raw values before we return them
+
+            // Convert x,y,w,h to xmin,ymin,xmax,ymax
+            float xmin = result.x;
+            float ymin = result.y;
+            float xmax = result.w;
+            float ymax = result.h;
+            // Convert x,y,w,h to xmin,ymin,xmax,ymax
+             //xmin = result.x - result.w / 2;
+             //ymin = result.y - result.h / 2;
+             //xmax = result.x + result.w / 2;
+             //ymax = result.y + result.h / 2;
+
+
+            xmin *= xScale;
+            ymin *= yScale;
+            xmax *= xScale;
+            ymax *= yScale;
+
+            // Clip values out of range
+            xmin = std::clamp(xmin, 0.0f, (float)viewport.Width);
+            ymin = std::clamp(ymin, 0.0f, (float)viewport.Height);
+            xmax = std::clamp(xmax, 0.0f, (float)viewport.Width);
+            ymax = std::clamp(ymax, 0.0f, (float)viewport.Height);
+
+            // Discard invalid boxes
+            if (xmax <= xmin || ymax <= ymin || IsInfOrNan({ xmin, ymin, xmax, ymax }))
+            {
+                continue;
+            }
+
+            Prediction pred = {};
+            pred.xmin = xmin;
+            pred.ymin = ymin;
+            pred.xmax = xmax;
+            pred.ymax = ymax;
+            pred.score = result.confidence;
+            pred.predictedClass = result.index;
+            pred.i = i;
+            pred.j = j;
+          
             m_preds.push_back(pred);
         }
     }
     // Apply NMS to select the best boxes
     m_preds = ApplyNonMaximalSuppression(m_preds, YoloV4Constants::c_nmsThreshold);
+
+    if (outputData.size() >= 5)
+    {
+
+        Vec3<float> value4((float*)outputData[masks_i], shapes[masks_i][0], shapes[masks_i][1], shapes[masks_i][2]);
+        Vec4<float> value5((float*)outputData[protos_i], shapes[protos_i][0], shapes[protos_i][1], shapes[protos_i][2], shapes[protos_i][3]);
+
+        // convert mask to BGRA data
+        if (m_mask.size() != value5.y * value5.x * 4)
+            m_mask.resize(value5.y * value5.x * 4);
+        std::fill(m_mask.begin(), m_mask.end(), 0);
+        m_mask_ready = false;
+        m_mask_width = value5.y;
+        m_mask_height = value5.x;
+        int channels = 4;
+        if (m_pred_mask.size() != value5.y * value5.x)
+            m_pred_mask.resize(value5.y * value5.x);
+
+        float xScale = (float)viewport.Width / value5.x;
+        float yScale = (float)viewport.Height / value5.y;
+
+        for (auto& pred : m_preds)
+        {
+            std::fill(m_pred_mask.begin(), m_pred_mask.end(), 0);
+
+            pred.mask_weights.resize(value4.x);
+            for (Size k = 0; k < value4.x; ++k)
+                pred.mask_weights[k] = value4[pred.i][pred.j][k];
+
+            for (Size i = 0; i < value5.w; ++i)
+            {
+                int pixelIndex = 0;
+                for (Size k = 0; k < value5.y; ++k)
+                {
+                    for (Size l = 0; l < value5.x; ++l)
+                    {
+                        // inside bbox?
+                        // 
+                        float y = k * yScale;
+                        float x = l * xScale;
+
+                        if (x >= pred.xmin && x <= pred.xmax && y >= pred.ymin && y <= pred.ymax)
+                        {
+                            // for classes
+                            float sum = 0.0f;
+                            for (Size j = 0; j < value5.z; ++j)
+                            {
+                                auto v = value5[i][j][k][l];
+                                sum += pred.mask_weights[j] * v;
+                            }
+
+                            sum = sum / (1.0f + exp(-sum));
+                            BYTE m = 0;
+                            if (sum > 0.2)
+                            {
+                                m_pred_mask[k * value5.x + l] = 1;
+
+                                m = pred.predictedClass % 20;
+                                m_mask[pixelIndex * channels + 0] = (uint8_t)(colors[m] & 0xff); 
+                                m_mask[pixelIndex * channels + 1] = (uint8_t)((colors[m] & 0xff00) >> 8);
+                                m_mask[pixelIndex * channels + 2] = (uint8_t)((colors[m] & 0xff0000) >> 16);
+                                m_mask[pixelIndex * channels + 3] = (uint8_t)0x80;
+                            }
+                           
+                        }
+                        pixelIndex++;
+                    }
+                }
+            }
+
+            // get contour from m_pred_mask
+            depixelator::Bitmap bmap;
+            bmap.data = m_pred_mask.data();
+            bmap.height = m_mask_height;
+            bmap.width = m_mask_width;
+            bmap.stride = m_mask_width;
+            pred.m_polylines = depixelator::findContours(bmap);
+            //pred.m_polylines = depixelator::simplify(pred.m_polylines, 0.1f);
+            //pred.m_polylines = depixelator::simplifyRDP(pred.m_polylines, 0.1f);
+            pred.m_polylines = depixelator::traceSlopes(pred.m_polylines);
+            pred.m_polylines = depixelator::smoothen(pred.m_polylines, 0.1f, 4);
+           
+            for (auto& polyline : pred.m_polylines)
+            {
+                for (auto& p : polyline)
+                {
+                    p.x *= xScale, p.y *= yScale;
+                }
+            }
+        }
+    }
 }
 
 
-void Sample::GetPredictions(const std::byte *  outputData, std::vector<int64_t> & shape)
+void Sample::GetPredictions(const std::byte *  outputData, std::vector<int64_t> & shape, const std::vector<std::string>& output_names, Model_t * model)
 {
     Vec3<float> value((float*)outputData, shape[0], shape[1], shape[2]);
 
@@ -770,19 +1711,49 @@ void Sample::GetPredictions(const std::byte *  outputData, std::vector<int64_t> 
     float xScale = (float)viewport.Width / YoloV4Constants::c_inputWidth;
     float yScale = (float)viewport.Height / YoloV4Constants::c_inputHeight;
 
+    float* _ptr = (float*)outputData;
     for (Size i = 0; i < value.z; ++i)
     {
         for (Size j = 0; j < value.y; ++j)
         {
             auto ptr = value[i][j];
-            if (ptr[4] < threshold) continue;
             Detection result;
+            if (value.x == 85)
+            {
+                float max = 0.0f;
+                int max_loc = 0;
+                float box_confidence = ptr[4];
+                //if (box_confidence == 0.0f)
+                //    continue;
+                box_confidence = 1.0f;
+                for (int ii = 0; ii < 80; ii++)
+                {
+                    auto class_conf = ptr[i + 5] * box_confidence;
+                    if (class_conf > max)
+                    {
+                        max = class_conf;
+                        max_loc = i;
+                    }
+                }
+                result.confidence = max;
+                result.index = max_loc;
+
+            }
+            else
+            {
+                //float* _ptr = (float*)ptr.data();
+                if (ptr[4] < threshold) continue;
+                result.confidence = (float)ptr[4];
+                result.index = (Size)ptr[5];
+
+            }
+          
             result.x = ptr[0];
             result.y = ptr[1];
             result.w = ptr[2];
             result.h = ptr[3];
-            result.index = (Size)ptr[5];
-            result.confidence = (float)ptr[4];
+           
+            
 
             // We need to do some postprocessing on the raw values before we return them
 
@@ -824,7 +1795,7 @@ void Sample::GetPredictions(const std::byte *  outputData, std::vector<int64_t> 
 }
 
 Sample::Sample()
-    : m_ctrlConnected(false)
+    : m_ctrlConnected(false), m_run_on_gpu(false)
 {
     // Use gamma-correct rendering.
     // Renders only 2D, so no need for a depth buffer.
@@ -842,8 +1813,10 @@ Sample::~Sample()
 }
 
 // Initialize the Direct3D resources required to run.
-bool Sample::Initialize(HWND window, int width, int height)
+bool Sample::Initialize(HWND window, int width, int height, bool run_on_gpu)
 {
+    m_run_on_gpu = run_on_gpu;
+
     m_gamePad = std::make_unique<GamePad>();
 
     m_keyboard = std::make_unique<Keyboard>();
@@ -931,8 +1904,27 @@ void Sample::Update(DX::StepTimer const& timer)
     auto kb = m_keyboard->GetState();
     m_keyboardButtons.Update(kb);
 
+
+
     if (kb.Escape)
     {
+        ExitSample();
+    }
+
+    if (m_keyboardButtons.IsKeyPressed(Keyboard::G) && m_player.get() != nullptr)
+    {
+        wchar_t path[MAX_PATH];
+        GetModuleFileNameW(NULL, path, sizeof(path));
+        wchar_t* para = L"-gpu";
+        _wexecl(path, L"%s", para);
+        ExitSample();
+    }
+    if (m_keyboardButtons.IsKeyPressed(Keyboard::N) && m_player.get() != nullptr)
+    {
+        wchar_t path[MAX_PATH];
+        GetModuleFileNameW(NULL, path, sizeof(path));
+        wchar_t* para = L"-npu";
+        _wexecl(path, L"%s", para);
         ExitSample();
     }
 
@@ -947,22 +1939,25 @@ void Sample::Update(DX::StepTimer const& timer)
             m_player->Play();
         }
     }
+    int mul = 1;
+    if (m_keyboardButtons.IsKeyPressed(Keyboard::LeftControl) || m_keyboardButtons.IsKeyPressed(Keyboard::RightControl))
+        mul = 10;
     if (m_keyboardButtons.IsKeyPressed(Keyboard::Right) && m_player.get() != nullptr)
     {
         m_player->Pause();
         if (m_keyboardButtons.IsKeyPressed(Keyboard::LeftShift) || m_keyboardButtons.IsKeyPressed(Keyboard::RightShift))
-            m_player->Skip(30);
+            m_player->Skip((float)30*mul);
         else
-            m_player->Skip(10);
+            m_player->Skip((float)10*mul);
         m_player->Play();
     }
     if (m_keyboardButtons.IsKeyPressed(Keyboard::Left) && m_player.get() != nullptr)
     {
         m_player->Pause();
         if (m_keyboardButtons.IsKeyPressed(Keyboard::LeftShift) || m_keyboardButtons.IsKeyPressed(Keyboard::RightShift))
-            m_player->Skip(-30);
+            m_player->Skip((float)-30*mul);
         else
-            m_player->Skip(-10);
+            m_player->Skip((float)-10*mul);
         m_player->Play();
     }
 
@@ -970,15 +1965,15 @@ void Sample::Update(DX::StepTimer const& timer)
 }
 #pragma endregion
 
-void Sample::OnNewMopdel(wchar_t* modelfile)
+void Sample::OnNewMopdel(const wchar_t* modelfile, bool bAddModel)
 {
 
     if (m_player->IsPlaying())
     {
         m_player->Pause();
     }
-
-    InitializeDirectMLResources(modelfile);
+  
+    InitializeDirectMLResources(modelfile, bAddModel);
 
     while (!m_player->IsInfoReady())
     {
@@ -990,7 +1985,7 @@ void Sample::OnNewMopdel(wchar_t* modelfile)
 }
 
 
-void Sample::OnNewFile(wchar_t* filename)
+void Sample::OnNewFile(const wchar_t* filename)
 {
     if (m_player->IsPlaying())
     {
@@ -1052,11 +2047,200 @@ void Sample::OnNewFile(wchar_t* filename)
 // Draws the scene.
 void Sample::Render()
 {
+   
     // Don't try to render anything before the first Update.
     if (m_timer.GetFrameCount() == 0)
     {
         return;
     }
+
+    // 
+ // Kick off the compute work that will be used to render the next frame. We do this now so that the data will be
+ // ready by the time the next frame comes around.
+ // 
+
+ // Get the latest video frame
+    RECT r = { 0, 0, static_cast<LONG>(m_origTextureWidth), static_cast<LONG>(m_origTextureHeight) };
+    MFVideoNormalizedRect rect = { 0.0f, 0.0f, 1.0f, 1.0f };
+
+    m_player->TransferFrame(m_sharedVideoTexture, rect, r, m_pts);
+    if (true)
+    {
+        m_copypixels_tensor_duration = std::chrono::duration<double, std::milli>(0);
+        m_inference_duration = std::chrono::duration<double, std::milli>(0);
+        m_output_duration = std::chrono::duration<double, std::milli>(0);
+        m_preds.clear();
+        //m_output_texture.Reset();
+
+        for (auto& model : m_models)
+        {
+
+            // Convert image to tensor format (original texture -> model input)
+            const size_t inputChannels = model->m_inputShape[model->m_inputShape.size() - 3];
+            const size_t inputHeight = model->m_inputHeight;
+            const size_t inputWidth = model->m_inputWidth;
+            const size_t inputElementSize = model->m_inputDataType == ONNX_TENSOR_ELEMENT_DATA_TYPE_FLOAT ? sizeof(float) : sizeof(uint16_t);
+
+            if (model->m_inputBuffer.size() != inputChannels * inputHeight * inputWidth * inputElementSize)
+                model->m_inputBuffer.resize(inputChannels * inputHeight * inputWidth * inputElementSize);
+
+            if (CopySharedVideoTextureTensor(model->m_inputBuffer, model.get()))
+            {
+
+                // Record start
+                auto start = std::chrono::high_resolution_clock::now();
+
+                // Create input tensor
+                Ort::MemoryInfo memoryInfo2 = Ort::MemoryInfo::CreateCpu(OrtArenaAllocator, OrtMemTypeDefault);
+                auto inputTensor = Ort::Value::CreateTensor(
+                    memoryInfo2,
+                    model->m_inputBuffer.data(),
+                    model->m_inputBuffer.size(),
+                    model->m_inputShape.data(),
+                    model->m_inputShape.size(),
+                    model->m_inputDataType
+                );
+
+                // Bind tensors
+                Ort::MemoryInfo memoryInfo0 = Ort::MemoryInfo::CreateCpu(OrtArenaAllocator, OrtMemTypeDefault);
+                Ort::Allocator allocator0(model->m_session, memoryInfo0);
+                auto inputName = model->m_session.GetInputNameAllocated(0, allocator0);
+                auto bindings = Ort::IoBinding::IoBinding(model->m_session);
+                try {
+
+                    bindings.BindInput(inputName.get(), inputTensor);
+                }
+                catch (const std::runtime_error& re) {
+                    const char* err = re.what();
+                    MessageBoxA(0, err, "Error loading model", MB_YESNO);
+                    std::cerr << "Runtime error: " << re.what() << std::endl;
+                    exit(1);
+                }
+                // Create output tensor(s) and bind
+                auto tensors = model->m_session.GetOutputCount();
+                std::vector<std::string> output_names;
+                std::vector<std::vector<int64_t>> output_shapes;
+                std::vector<ONNXTensorElementDataType> output_datatypes;
+                for (int i = 0; i < tensors; i++)
+                {
+                    auto output_name = model->m_session.GetOutputNameAllocated(i, allocator0);
+                    output_names.push_back(output_name.get());
+                    auto type_info = model->m_session.GetOutputTypeInfo(i);
+                    auto tensor_info = type_info.GetTensorTypeAndShapeInfo();
+                    auto shape = tensor_info.GetShape();
+
+                    for (int i = 0; i < shape.size(); i++)
+                    {
+                        if (i == 0 && shape[i] == -1)
+                            shape[i] = 1;
+                        if (i > 0 && shape[i] == -1)
+                            shape[i] = 640;
+                    }
+
+                    output_shapes.push_back(shape);
+
+
+
+                    output_datatypes.push_back(tensor_info.GetElementType());
+
+                    bindings.BindOutput(output_names.back().c_str(), memoryInfo2);
+                }
+                HRESULT hr0;
+                try {
+                    // Record start
+                    //auto start = std::chrono::high_   resolution_clock::now();
+
+                    // Run the session to get inference results.
+                    Ort::RunOptions runOpts;
+                    model->m_session.Run(runOpts, bindings);
+
+                    hr0 = m_d3dDevice->GetDeviceRemovedReason();
+
+                    bindings.SynchronizeOutputs();
+                }
+                catch (const std::runtime_error& re) {
+                    const char* err = re.what();
+                    MessageBoxA(0, err, "Error loading model", MB_YESNO);
+                    std::cerr << "Runtime error: " << re.what() << std::endl;
+                    exit(1);
+                }
+                catch (const std::exception& ex)
+                {
+                    const char* err = ex.what();
+                    MessageBoxA(0, err, "Error loading model", MB_YESNO);
+                    std::cerr << "Error occurred: " << ex.what() << std::endl;
+                    exit(1);
+                }
+
+
+                try {
+
+                    THROW_IF_FAILED(m_d3dDevice->GetDeviceRemovedReason());
+                }
+                catch (const std::exception& ex)
+                {
+                    const char* err = ex.what();
+                    MessageBoxA(0, err, "Error loading model", MB_YESNO);
+                    std::cerr << "Error occurred: " << ex.what() << std::endl;
+                    exit(1);
+                    //extern void MyDeviceRemovedHandler(ID3D12Device * pDevice);
+                    //MyDeviceRemovedHandler(m_d3dDevice.Get());
+                }
+
+                std::vector<const std::byte*> outputData;
+                int  i = 0;
+                for (int i = 0; i < tensors; i++)
+                {
+                    const std::byte* outputBuffer = reinterpret_cast<const std::byte*>(bindings.GetOutputValues()[i].GetTensorRawData());
+                    outputData.push_back(outputBuffer);
+                }
+
+                auto end = std::chrono::high_resolution_clock::now();
+                m_inference_duration += (end - start);
+
+                if (outputData.size() > 0)
+                {
+                    // Record start
+                    auto start = std::chrono::high_resolution_clock::now();
+
+
+                    if (outputData.size() == 1 && output_shapes[0].size() == 3 && output_datatypes[0] != ONNX_TENSOR_ELEMENT_DATA_TYPE_UINT8)
+                        GetPredictions(outputData[0], output_shapes[0], output_names, model.get());
+                    else  if (outputData.size() == 1 && output_shapes[0].size() == 4)
+                        GetImage(outputData[0], output_shapes[0], model.get(), output_datatypes[0]);
+                    else  if (outputData.size() == 1 && output_shapes[0].size() == 3 && output_datatypes[0] == ONNX_TENSOR_ELEMENT_DATA_TYPE_UINT8)
+                        GetMask(outputData[0], output_shapes[0], model.get(), output_datatypes[0]);
+                    else if (outputData.size() == 2 && output_names[0] == "box_coords" && output_names[1] == "box_scores")
+                    {
+                        // mediapipe onnx model?
+                        GetFaces(outputData, output_shapes, model.get());
+                    }
+                    else if (outputData.size() == 2)
+                        GetPredictions2(outputData, output_shapes, output_names, model.get());
+                    else if (outputData.size() >= 3)
+                        GetPredictions(outputData, output_shapes, output_names, model.get());
+
+                    if (!m_mask_ready)
+                        m_mask.clear();
+
+                    auto end = std::chrono::high_resolution_clock::now();
+                    m_output_duration += (end - start);
+                }
+            }
+        }
+    }
+    if (m_mask_ready)
+    {
+        m_mask_ready = false;
+        //auto viewport = m_deviceResources->GetScreenViewport();
+        //m_sprite.get()->SetViewport(viewport);
+
+        //auto device = m_deviceResources->GetD3DDevice();
+        NewTexture(m_mask.data(), m_mask_width, m_mask_height);
+        //auto b = LoadTextureFromMemory(&m_mask[0], m_mask_width, m_mask_height,
+        //    device, m_SRVDescriptorHeap->GetCpuHandle(e_outputTensor), m_texture.ReleaseAndGetAddressOf());
+    }
+
 
     // Prepare the command list to render a new frame.
     m_deviceResources->Prepare();
@@ -1094,388 +2278,408 @@ void Sample::Render()
 
         commandList->DrawIndexedInstanced(6, 1, 0, 0, 0);
 
+        if (m_mask.size() > 0 && m_texture.Get())
+        {
+
+            commandList->SetGraphicsRootSignature(m_texRootSignatureLinear.Get());
+            commandList->SetPipelineState(m_texPipelineStateLinear.Get());
+
+            auto heap = m_SRVDescriptorHeap->Heap();
+            commandList->SetDescriptorHeaps(1, &heap);
+
+            commandList->SetGraphicsRootDescriptorTable(0,
+                m_SRVDescriptorHeap->GetGpuHandle(e_outputTensor));
+
+            // Set necessary state.
+            commandList->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
+            commandList->IASetIndexBuffer(&m_indexBufferView);
+
+            // Draw full screen texture
+            commandList->RSSetViewports(1, &viewport);
+            commandList->RSSetScissorRects(1, &scissorRect);
+            commandList->IASetVertexBuffers(0, 1, &m_vertexBufferView);
+
+            commandList->DrawIndexedInstanced(6, 1, 0, 0, 0);
+
+        }
+
         PIXEndEvent(commandList);
     }
 
-    // Render the UI
+    // Readback the raw data from the model, compute the model's predictions, and render the bounding boxes
     {
-        PIXBeginEvent(commandList, PIX_COLOR_DEFAULT, L"Render UI");
+        PIXBeginEvent(commandList, PIX_COLOR_DEFAULT, L"Render predictions");
 
+        // Print some debug information about the predictions
+#if 0
+        std::stringstream ss;
+        Format(ss, "# of predictions: ", m_preds.size(), "\n");
+
+        for (const auto& pred : m_preds)
+        {
+            const char* className = YoloV4Constants::c_classes[pred.predictedClass];
+            int xmin = static_cast<int>(std::round(pred.xmin));
+            int ymin = static_cast<int>(std::round(pred.ymin));
+            int xmax = static_cast<int>(std::round(pred.xmax));
+            int ymax = static_cast<int>(std::round(pred.ymax));
+
+            Format(ss, "  ", className, ": score ", pred.score, ", box (", xmin, ",", ymin, "),(", xmax, ",", ymax, ")\n");
+        }
+        OutputDebugStringA(ss.str().c_str());
+#endif
         commandList->RSSetViewports(1, &viewport);
         commandList->RSSetScissorRects(1, &scissorRect);
 
-        auto size = m_deviceResources->GetOutputSize();
-        auto safe = SimpleMath::Viewport::ComputeTitleSafeArea(size.right, size.bottom);
+        // Draw bounding box outlines
+        m_lineEffect->Apply(commandList);
 
-        // Draw the text HUD.
-        ID3D12DescriptorHeap* fontHeaps[] = { m_fontDescriptorHeap->Heap() };
-        commandList->SetDescriptorHeaps(_countof(fontHeaps), fontHeaps);
+        m_lineBatch->Begin(commandList);
+        float label_height = 5.0f;
+        float dx = 5.0f;
 
+        for (auto& pred : m_preds)
+        {
+            if (pred.predictedClass < 0)
+            {
+                label_height = 1.0f;
+                dx = 2.0f;
+            }
+            else
+            {
+                label_height = 5.0f;
+                dx = 5.0f;
+
+            }
+
+
+            m_lineEffect->SetAlpha(0.4f /*pred.score / 5.0*/);
+
+          
+
+            //DirectX::XMVECTORF32 White = { { { 0.980392158f, 0.980392158f, 0.980392158f, 1.0f} } }; // #fafafa
+            //DirectX::XMVECTORF32 White = { { { .0f, 0.980392158f, .0f, 1.0f} } }; // #fafafa
+            int col = colors[((pred.predictedClass < 0) ? 0 : pred.predictedClass) % 20];
+            DirectX::XMVECTORF32 White = { { { (col >> 16) / 255.0f, ((col >> 8) & 0xff) / 255.0f, (col & 0xff) / 255.0f, 1.0f} } }; // #fafafa
+
+            if (pred.m_polylines.size() == 0)
+            {
+                for (int i = 0; i < 2; i++)
+                {
+                    DirectX::XMVECTORF32 White = { { { (col >> 16) / 255.0f, ((col >> 8) & 0xff) / 255.0f, (col & 0xff) / 255.0f, 1.0f} } }; // #fafafa
+                    if (i == 1)
+                        White = { { { (col >> 16) / 255.0f, ((col >> 8) & 0xff) / 255.0f, (col & 0xff) / 255.0f, 1.0f} } }; // #fafafa
+                    {
+                        VertexPositionColor upperLeft(SimpleMath::Vector3(pred.xmin, pred.ymin, 0.f), White);
+                        VertexPositionColor upperRight(SimpleMath::Vector3(pred.xmax, pred.ymin, 0.f), White);
+                        VertexPositionColor lowerRight(SimpleMath::Vector3(pred.xmax, pred.ymin + label_height * dx, 0.f), White);
+                        VertexPositionColor lowerLeft(SimpleMath::Vector3(pred.xmin, pred.ymin + label_height * dx, 0.f), White);
+                        m_lineBatch->DrawQuad(upperLeft, upperRight, lowerRight, lowerLeft);
+                    }
+
+                    {
+                        VertexPositionColor upperLeft(SimpleMath::Vector3(pred.xmin, pred.ymin + dx, 0.f), White);
+                        VertexPositionColor upperRight(SimpleMath::Vector3(pred.xmin + dx, pred.ymin + dx, 0.f), White);
+                        VertexPositionColor lowerRight(SimpleMath::Vector3(pred.xmin + dx, pred.ymax - dx, 0.f), White);
+                        VertexPositionColor lowerLeft(SimpleMath::Vector3(pred.xmin, pred.ymax - dx, 0.f), White);
+                        m_lineBatch->DrawQuad(upperLeft, upperRight, lowerRight, lowerLeft);
+                    }
+                    {
+
+                        VertexPositionColor upperLeft(SimpleMath::Vector3(pred.xmin, pred.ymax - dx, 0.f), White);
+                        VertexPositionColor upperRight(SimpleMath::Vector3(pred.xmax - dx, pred.ymax - dx, 0.f), White);
+                        VertexPositionColor lowerRight(SimpleMath::Vector3(pred.xmax - dx, pred.ymax, 0.f), White);
+                        VertexPositionColor lowerLeft(SimpleMath::Vector3(pred.xmin, pred.ymax, 0.f), White);
+                        m_lineBatch->DrawQuad(upperLeft, upperRight, lowerRight, lowerLeft);
+                    }
+                    {
+                        VertexPositionColor upperLeft(SimpleMath::Vector3(pred.xmax - dx, pred.ymin + dx, 0.f), White);
+                        VertexPositionColor upperRight(SimpleMath::Vector3(pred.xmax, pred.ymin + dx, 0.f), White);
+                        VertexPositionColor lowerRight(SimpleMath::Vector3(pred.xmax, pred.ymax, 0.f), White);
+                        VertexPositionColor lowerLeft(SimpleMath::Vector3(pred.xmax - dx, pred.ymax, 0.f), White);
+                        m_lineBatch->DrawQuad(upperLeft, upperRight, lowerRight, lowerLeft);
+                    }
+                }
+            }
+            for (auto p : pred.m_keypoints)
+            {
+                DirectX::XMVECTORF32 KeyColor = { {  {0.0f, 1.0f, .0f, 1.0f} } }; // # green
+                float dx = 3.0f;
+                VertexPositionColor upperLeft(SimpleMath::Vector3(p.first - dx, p.second - dx, 0.f), KeyColor);
+                VertexPositionColor upperRight(SimpleMath::Vector3(p.first + dx, p.second - dx, 0.f), KeyColor);
+                VertexPositionColor lowerRight(SimpleMath::Vector3(p.first + dx, p.second + dx, 0.f), KeyColor);
+                VertexPositionColor lowerLeft(SimpleMath::Vector3(p.first - dx, p.second + dx, 0.f), KeyColor);
+                m_lineBatch->DrawQuad(upperLeft, upperRight, lowerRight, lowerLeft);
+
+
+            }
+            /*
+                VertexPositionColor upperLeft(SimpleMath::Vector3(pred.xmin, pred.ymin, 0.f), White);
+                VertexPositionColor upperRight(SimpleMath::Vector3(pred.xmax, pred.ymin, 0.f), White);
+                VertexPositionColor lowerLeft(SimpleMath::Vector3(pred.xmin, pred.ymax, 0.f), White);
+                VertexPositionColor lowerRight(SimpleMath::Vector3(pred.xmax, pred.ymax, 0.f), White);
+                m_lineBatch->DrawQuad(upperLeft, upperRight, lowerRight, lowerLeft);
+                */
+                //m_lineBatch->DrawLine(upperLeft, upperRight);
+                //m_lineBatch->DrawLine(upperRight, lowerRight);
+                //m_lineBatch->DrawLine(lowerRight, lowerLeft);
+                //m_lineBatch->DrawLine(lowerLeft, upperLeft);
+
+            // fill polylines
+
+            for (auto& polyline : pred.m_polylines)
+            {
+                // The number type to use for tessellation
+                using Coord = double;
+
+                // The index type. Defaults to uint32_t, but you can also pass uint16_t if you know that your
+                // data won't have more than 65536 vertices.
+                using N = uint32_t;
+
+                // Create array
+                using Point = std::array<Coord, 2>;
+                std::vector<std::vector<Point>> polygon;
+                polygon.push_back(std::vector<Point>());
+                int  i = 0;
+                for (auto& p : polyline)
+                {
+                    polygon[0].push_back(Point{ p.x, p.y });
+                }
+                auto indices = mapbox::earcut<int32_t>(polygon);
+                int size = indices.size();
+                std::vector< VertexPositionColor> vertices;
+                vertices.reserve(size);
+               
+                for (auto n : indices)
+                {
+                    Point& p = polygon[0][n];
+                    VertexPositionColor e(SimpleMath::Vector3(p[0], p[1], 0.f), White);
+                    vertices.push_back(e);
+                }
+                m_lineBatch->Draw(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST, vertices.data(), size);
+
+#if 0
+                std::vector<crushedpixel::Vec2> points;
+
+                for (auto& p : polyline)
+                {
+                    points.push_back(crushedpixel::Vec2{ p.x, p.y });
+                }
+
+                auto thickness = 30.0f;
+                auto thick_line_vertices = crushedpixel::Polyline2D::create(points, thickness,
+                    crushedpixel::Polyline2D::JointStyle::MITER,
+                    crushedpixel::Polyline2D::EndCapStyle::SQUARE);
+
+                vertices.clear();
+                vertices.reserve(thick_line_vertices.size());
+
+                //White.f[0] = 1.0f;
+                for (auto p : thick_line_vertices)
+                {
+                    VertexPositionColor e(SimpleMath::Vector3(p.x, p.y, 0.f), White);
+                   vertices.push_back(e);
+                }
+                m_lineBatch->Draw(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST, vertices.data(), vertices.size());
+#endif
+            }
+        }
+        m_lineBatch->End();
+
+        // Draw bounding box outlines
+        m_lineEffect2->Apply(commandList);
+
+        m_lineBatch2->Begin(commandList);
+      
+        m_lineEffect2->SetAlpha(0.9f /*pred.score / 5.0*/);
+        for (auto& pred : m_preds)
+        {
+            //DirectX::XMVECTORF32 White = { { { 0.980392158f, 0.980392158f, 0.980392158f, 1.0f} } }; // #fafafa
+            //DirectX::XMVECTORF32 White = { { { .0f, 0.980392158f, .0f, 1.0f} } }; // #fafafa
+            int col = colors[((pred.predictedClass < 0) ? 0 : pred.predictedClass) % 20];
+            DirectX::XMVECTORF32 White = { { { (col >> 16) / 255.0f, ((col >> 8) & 0xff) / 255.0f, (col & 0xff) / 255.0f, 1.0f} } }; // #fafafa
+
+            for (auto& polyline : pred.m_polylines)
+            {
+                std::vector<crushedpixel::Vec2> points;
+
+                for (auto& p : polyline)
+                {
+                    points.push_back(crushedpixel::Vec2{ p.x, p.y });
+                }
+
+                auto thickness = 10.0f;
+                auto thick_line_vertices = crushedpixel::Polyline2D::create(points, thickness,
+                    crushedpixel::Polyline2D::JointStyle::MITER,
+                    crushedpixel::Polyline2D::EndCapStyle::SQUARE);
+
+                std::vector< VertexPositionColor> vertices;
+                vertices.reserve(thick_line_vertices.size());
+
+                //White.f[0] = 1.0f;
+                for (auto p : thick_line_vertices)
+                {
+                    VertexPositionColor e(SimpleMath::Vector3(p.x, p.y, 0.f), White);
+                    vertices.push_back(e);
+                }
+                m_lineBatch2->Draw(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST, vertices.data(), vertices.size());
+
+            }
+
+
+          
+        }
+
+
+        m_lineBatch2->End();
+        
+        // Draw predicted class labels
         m_spriteBatch->Begin(commandList);
+        for (const auto& pred : m_preds)
+        {
+            if (pred.predictedClass >= 0)
+            {
+                const char* classText = YoloV4Constants::c_classes[pred.predictedClass];
+                std::wstring classTextW(classText, classText + strlen(classText));
+                wchar_t _class[128];
+                swprintf_s(_class, 128, L"%s %d%%", classTextW.c_str(), (int)(pred.score * 100.0f));
+                if (pred.m_polylines.size() == 0)
+                {
+                    // Render a drop shadow by drawing the text twice with a slight offset.
+                    DX::DrawControllerString(m_spriteBatch.get(), m_legendFont.get(), m_ctrlFont.get(),
+                        _class, SimpleMath::Vector2(pred.xmin, pred.ymin - 1.5f * dx) + SimpleMath::Vector2(2.f, 2.f), SimpleMath::Vector4(0.0f, 0.0f, 0.0f, 0.25f));
+                    DX::DrawControllerString(m_spriteBatch.get(), m_legendFont.get(), m_ctrlFont.get(),
+                        _class, SimpleMath::Vector2(pred.xmin, pred.ymin - 1.5f * dx), ATG::Colors::DarkGrey);
+                }
+                else
+                {
+                    // center
+                    SimpleMath::Vector2 _classSize = m_legendFont->MeasureString(_class);
+                     // Render a drop shadow by drawing the text twice with a slight offset.
+                    DX::DrawControllerString(m_spriteBatch.get(), m_legendFont.get(), m_ctrlFont.get(),
+                        _class,
+                        SimpleMath::Vector2((pred.xmin + pred.xmax) / 2.0f - _classSize.x/2.0f, (pred.ymin + pred.ymax) / 2.0f) + SimpleMath::Vector2(2.f, 2.f),
+                        SimpleMath::Vector4(0.0f, 0.0f, 0.0f, 0.25f));
 
-        float xCenter = static_cast<float>(safe.left + (safe.right - safe.left) / 2);
+                    DX::DrawControllerString(m_spriteBatch.get(), m_legendFont.get(), m_ctrlFont.get(),
+                        _class,
+                        SimpleMath::Vector2((pred.xmin + pred.xmax) /2.0f - _classSize.x / 2.0f, (pred.ymin + pred.ymax) / 2.0f ),
+                        ATG::Colors::DarkGrey);
 
-        const wchar_t* mainLegend = m_ctrlConnected ?
-            L"[View] Exit   [X] Play/Pause"
-            : L"ESC - Exit     ENTER - Play/Pause   Mouse Context Menu - Open new Video (click above) / Onnx-Model (click on this line)   (Shift) < or (Shift) > - back- forward";
-        SimpleMath::Vector2 mainLegendSize = m_legendFont->MeasureString(mainLegend);
-        auto mainLegendPos = SimpleMath::Vector2(xCenter - mainLegendSize.x / 2, static_cast<float>(safe.bottom) - m_legendFont->GetLineSpacing());
-
-        // Render a drop shadow by drawing the text twice with a slight offset.
-        DX::DrawControllerString(m_spriteBatch.get(), m_legendFont.get(), m_ctrlFont.get(),
-            mainLegend, mainLegendPos + SimpleMath::Vector2(2.f, 2.f), SimpleMath::Vector4(0.0f, 0.0f, 0.0f, 0.25f));
-        DX::DrawControllerString(m_spriteBatch.get(), m_legendFont.get(), m_ctrlFont.get(),
-            mainLegend, mainLegendPos, ATG::Colors::White);
-
-        const wchar_t* modeLabel = L"Object detection model:";
-        SimpleMath::Vector2 modeLabelSize = m_labelFontBold->MeasureString(modeLabel);
-        auto modeLabelPos = SimpleMath::Vector2(safe.right - modeLabelSize.x, static_cast<float>(safe.top));
-
-        m_labelFontBold->DrawString(m_spriteBatch.get(), modeLabel, modeLabelPos + SimpleMath::Vector2(2.f, 2.f), SimpleMath::Vector4(0.f, 0.f, 0.f, 0.25f));
-        m_labelFontBold->DrawString(m_spriteBatch.get(), modeLabel, modeLabelPos, ATG::Colors::White);
-
-        wchar_t model[128];
-        swprintf_s(model, 128, L"%s NPU", m_modelfile.c_str());
-        SimpleMath::Vector2 modelSize = m_labelFont->MeasureString(model);
-        auto modelPos = SimpleMath::Vector2(safe.right - modelSize.x, static_cast<float>(safe.top) + m_labelFontBold->GetLineSpacing());
-
-        m_labelFont->DrawString(m_spriteBatch.get(), model, modelPos + SimpleMath::Vector2(2.f, 2.f), SimpleMath::Vector4(0.f, 0.f, 0.f, 0.25f));
-        m_labelFont->DrawString(m_spriteBatch.get(), model, modelPos, ATG::Colors::White);
-
-        wchar_t fps[16];
-        swprintf_s(fps, 16, L"%0.2f FPS", m_fps.GetFPS());
-        SimpleMath::Vector2 fpsSize = m_labelFont->MeasureString(fps);
-        auto fpsPos = SimpleMath::Vector2(safe.right - fpsSize.x, static_cast<float>(safe.top) + m_labelFont->GetLineSpacing() * 3.f);
-
-        m_labelFont->DrawString(m_spriteBatch.get(), fps, fpsPos + SimpleMath::Vector2(2.f, 2.f), SimpleMath::Vector4(0.f, 0.f, 0.f, 0.25f));
-        m_labelFont->DrawString(m_spriteBatch.get(), fps, fpsPos, ATG::Colors::White);
-
-        wchar_t cpt[32];
-        swprintf_s(cpt, 32, L"scale/copy: %0.2f ms", m_copypixels_tensor_duration.count());
-        SimpleMath::Vector2 cptySize = m_labelFont->MeasureString(cpt);
-        auto cptyPos = SimpleMath::Vector2(safe.right - cptySize.x, static_cast<float>(safe.top) + m_labelFont->GetLineSpacing() * 4.f);
-
-        m_labelFont->DrawString(m_spriteBatch.get(), cpt, cptyPos + SimpleMath::Vector2(2.f, 2.f), SimpleMath::Vector4(0.f, 0.f, 0.f, 0.25f));
-        m_labelFont->DrawString(m_spriteBatch.get(), cpt, cptyPos, ATG::Colors::White);
-
-        wchar_t inf[32];
-        swprintf_s(inf, 32, L"inference: %0.2f ms", m_inference_duration.count());
-        SimpleMath::Vector2 infySize = m_labelFont->MeasureString(inf);
-        auto infyPos = SimpleMath::Vector2(safe.right - infySize.x, static_cast<float>(safe.top) + m_labelFont->GetLineSpacing() * 5.f);
-
-        m_labelFont->DrawString(m_spriteBatch.get(), inf, infyPos + SimpleMath::Vector2(2.f, 2.f), SimpleMath::Vector4(0.f, 0.f, 0.f, 0.25f));
-        m_labelFont->DrawString(m_spriteBatch.get(), inf, infyPos, ATG::Colors::White);
-
-        wchar_t out[32];
-        swprintf_s(out, 32, L"output: %0.2f ms", m_output_duration.count());
-        SimpleMath::Vector2 outySize = m_labelFont->MeasureString(out);
-        auto outyPos = SimpleMath::Vector2(safe.right - outySize.x, static_cast<float>(safe.top) + m_labelFont->GetLineSpacing() * 6.f);
-
-        m_labelFont->DrawString(m_spriteBatch.get(), out, outyPos + SimpleMath::Vector2(2.f, 2.f), SimpleMath::Vector4(0.f, 0.f, 0.f, 0.25f));
-        m_labelFont->DrawString(m_spriteBatch.get(), out, outyPos, ATG::Colors::White);
-
+                }
+            }
+        }
         m_spriteBatch->End();
 
+        // Render the UI
+        {
+            PIXBeginEvent(commandList, PIX_COLOR_DEFAULT, L"Render UI");
+
+            commandList->RSSetViewports(1, &viewport);
+            commandList->RSSetScissorRects(1, &scissorRect);
+
+            auto size = m_deviceResources->GetOutputSize();
+            auto safe = SimpleMath::Viewport::ComputeTitleSafeArea(size.right, size.bottom);
+
+            // Draw the text HUD.
+            ID3D12DescriptorHeap* fontHeaps[] = { m_fontDescriptorHeap->Heap() };
+            commandList->SetDescriptorHeaps(_countof(fontHeaps), fontHeaps);
+
+            m_spriteBatch->Begin(commandList);
+
+            float xCenter = static_cast<float>(safe.left + (safe.right - safe.left) / 2);
+
+            const wchar_t* mainLegend = m_ctrlConnected ?
+                L"[View] Exit   [X] Play/Pause"
+                : L"ESC - Exit     ENTER - Play/Pause   Context Menu - Open new Video (click above) / <Add> Onnx-Model (<Ctrl> click on this line)   (Shift) < or (Shift) > - back- forward";
+            SimpleMath::Vector2 mainLegendSize = m_legendFont->MeasureString(mainLegend);
+            auto mainLegendPos = SimpleMath::Vector2(xCenter - mainLegendSize.x / 2, static_cast<float>(safe.bottom) - m_legendFont->GetLineSpacing());
+
+            // Render a drop shadow by drawing the text twice with a slight offset.
+            DX::DrawControllerString(m_spriteBatch.get(), m_legendFont.get(), m_ctrlFont.get(),
+                mainLegend, mainLegendPos + SimpleMath::Vector2(2.f, 2.f), SimpleMath::Vector4(0.0f, 0.0f, 0.0f, 0.25f));
+            DX::DrawControllerString(m_spriteBatch.get(), m_legendFont.get(), m_ctrlFont.get(),
+                mainLegend, mainLegendPos, ATG::Colors::White);
+
+            const wchar_t* modeLabel = L"Object detection model:";
+            if (m_models.size() > 1)
+                modeLabel = L"Object detection models:";
+            SimpleMath::Vector2 modeLabelSize = m_labelFontBold->MeasureString(modeLabel);
+            auto modeLabelPos = SimpleMath::Vector2(safe.right - modeLabelSize.x, static_cast<float>(safe.top));
+
+            m_labelFontBold->DrawString(m_spriteBatch.get(), modeLabel, modeLabelPos + SimpleMath::Vector2(2.f, 2.f), SimpleMath::Vector4(0.f, 0.f, 0.f, 0.25f));
+            m_labelFontBold->DrawString(m_spriteBatch.get(), modeLabel, modeLabelPos, ATG::Colors::White);
+
+            int line = 1;
+            for (auto& _model : m_models)
+            {
+                wchar_t model[128];
+                swprintf_s(model, 128, L"%s %s", _model->m_modelfile.c_str(), m_device_name.c_str());
+                SimpleMath::Vector2 modelSize = m_labelFont->MeasureString(model);
+                auto modelPos = SimpleMath::Vector2(safe.right - modelSize.x, static_cast<float>(safe.top) + m_labelFontBold->GetLineSpacing() * line++);
+
+                m_labelFont->DrawString(m_spriteBatch.get(), model, modelPos + SimpleMath::Vector2(2.f, 2.f), SimpleMath::Vector4(0.f, 0.f, 0.f, 0.25f));
+                m_labelFont->DrawString(m_spriteBatch.get(), model, modelPos, ATG::Colors::White);
+            }
+            line++;
+            if (m_pts > 0)
+            {
+                double seconds = (double)m_pts * 0.0000001;
+                int h = (int)(seconds / 3600.0);
+                double restm = fmod(seconds, 3600.0);
+                int m = (int)(restm / 60.0);
+                double sec = fmod(restm, 60.0);
+                int s = (int)sec;
+                double f = sec - (double)s;
+                int frames = (int)(25 * f);
+                wchar_t _pts[32];
+                swprintf_s(_pts, 32, L"%d:%d:%d.%02d PTS", h, m, s, frames);
+                SimpleMath::Vector2 _ptsSize = m_labelFont->MeasureString(_pts);
+                auto _ptsPos = SimpleMath::Vector2(safe.right - _ptsSize.x, static_cast<float>(safe.top) + m_labelFont->GetLineSpacing() * line++);
+
+                m_labelFont->DrawString(m_spriteBatch.get(), _pts, _ptsPos + SimpleMath::Vector2(2.f, 2.f), SimpleMath::Vector4(0.f, 0.f, 0.f, 0.25f));
+                m_labelFont->DrawString(m_spriteBatch.get(), _pts, _ptsPos, ATG::Colors::White);
+            }
+            else
+                line++;
+            wchar_t fps[16];
+            swprintf_s(fps, 16, L"%0.2f FPS", m_fps.GetFPS());
+            SimpleMath::Vector2 fpsSize = m_labelFont->MeasureString(fps);
+            auto fpsPos = SimpleMath::Vector2(safe.right - fpsSize.x, static_cast<float>(safe.top) + m_labelFont->GetLineSpacing() * line++);
+
+            m_labelFont->DrawString(m_spriteBatch.get(), fps, fpsPos + SimpleMath::Vector2(2.f, 2.f), SimpleMath::Vector4(0.f, 0.f, 0.f, 0.25f));
+            m_labelFont->DrawString(m_spriteBatch.get(), fps, fpsPos, ATG::Colors::White);
+
+            wchar_t cpt[32];
+            swprintf_s(cpt, 32, L"scale/copy: %0.2f ms", m_copypixels_tensor_duration.count());
+            SimpleMath::Vector2 cptySize = m_labelFont->MeasureString(cpt);
+            auto cptyPos = SimpleMath::Vector2(safe.right - cptySize.x, static_cast<float>(safe.top) + m_labelFont->GetLineSpacing() * line++);
+
+            m_labelFont->DrawString(m_spriteBatch.get(), cpt, cptyPos + SimpleMath::Vector2(2.f, 2.f), SimpleMath::Vector4(0.f, 0.f, 0.f, 0.25f));
+            m_labelFont->DrawString(m_spriteBatch.get(), cpt, cptyPos, ATG::Colors::White);
+
+            wchar_t inf[32];
+            swprintf_s(inf, 32, L"inference: %0.2f ms", m_inference_duration.count());
+            SimpleMath::Vector2 infySize = m_labelFont->MeasureString(inf);
+            auto infyPos = SimpleMath::Vector2(safe.right - infySize.x, static_cast<float>(safe.top) + m_labelFont->GetLineSpacing() * line++);
+
+            m_labelFont->DrawString(m_spriteBatch.get(), inf, infyPos + SimpleMath::Vector2(2.f, 2.f), SimpleMath::Vector4(0.f, 0.f, 0.f, 0.25f));
+            m_labelFont->DrawString(m_spriteBatch.get(), inf, infyPos, ATG::Colors::White);
+
+            wchar_t out[32];
+            swprintf_s(out, 32, L"output: %0.2f ms", m_output_duration.count());
+            SimpleMath::Vector2 outySize = m_labelFont->MeasureString(out);
+            auto outyPos = SimpleMath::Vector2(safe.right - outySize.x, static_cast<float>(safe.top) + m_labelFont->GetLineSpacing() * line++);
+
+            m_labelFont->DrawString(m_spriteBatch.get(), out, outyPos + SimpleMath::Vector2(2.f, 2.f), SimpleMath::Vector4(0.f, 0.f, 0.f, 0.25f));
+            m_labelFont->DrawString(m_spriteBatch.get(), out, outyPos, ATG::Colors::White);
+
+            m_spriteBatch->End();
+
+            PIXEndEvent(commandList);
+        }
+
+
         PIXEndEvent(commandList);
-    }
-    // 
-    // Kick off the compute work that will be used to render the next frame. We do this now so that the data will be
-    // ready by the time the next frame comes around.
-    // 
-
-#if USE_VIDEO
-    // Get the latest video frame
-    RECT r = { 0, 0, static_cast<LONG>(m_origTextureWidth), static_cast<LONG>(m_origTextureHeight) };
-    MFVideoNormalizedRect rect = { 0.0f, 0.0f, 1.0f, 1.0f };
-    m_player->TransferFrame(m_sharedVideoTexture, rect, r);
-#endif
-
-    // Convert image to tensor format (original texture -> model input)
-    const size_t inputChannels = m_inputShape[m_inputShape.size() - 3];
-    const size_t inputHeight = m_inputShape[m_inputShape.size() - 2];
-    const size_t inputWidth = m_inputShape[m_inputShape.size() - 1];
-    const size_t inputElementSize = m_inputDataType == ONNX_TENSOR_ELEMENT_DATA_TYPE_FLOAT ? sizeof(float) : sizeof(uint16_t);
-
-    // next version
-    // // Create d3d_buffer using D3D12 APIs
-    //    Microsoft::WRL::ComPtr<ID3D12Resource> d3d_buffer = ...;
-    // 
-    //  use hlsl ImageToTensor.hlsl compute shader to copy textture to input format texture d3d_buffer
-    // 
-    // // Create the dml resource from the D3D resource.
-    //    ort_dml_api->CreateGPUAllocationFromD3DResource(d3d_buffer.Get(), &dml_resource);
-    // 
-    // Ort::Value ort_value(Ort::Value::CreateTensor(memory_info_dml, dml_resource,
-    //         d3d_buffer_size, shape.data(), shape.size(),
-    //            ONNX_TENSOR_ELEMENT_DATA_TYPE_FLOAT));
-    // 
-    // see: https://github.com/ankan-ban/HelloOrtDml/blob/main/Main.cpp
-    // https://onnxruntime.ai/docs/performance/device-tensor.html
-    // Load image and transform it into an NCHW tensor with the correct shape and data type.
-    std::vector<std::byte> inputBuffer(inputChannels* inputHeight* inputWidth* inputElementSize);
-   
-    if (CopySharedVideoTextureTensor(inputBuffer))
-    {
-
-        // Record start
-        auto start = std::chrono::high_resolution_clock::now();
-
-        // Create input tensor
-        Ort::MemoryInfo memoryInfo2 = Ort::MemoryInfo::CreateCpu(OrtArenaAllocator, OrtMemTypeDefault);
-        //Ort::MemoryInfo memoryInfo2("DML", OrtAllocatorType::OrtDeviceAllocator, 0, OrtMemType::OrtMemTypeDefault);
-        auto inputTensor = Ort::Value::CreateTensor(
-            memoryInfo2,
-            inputBuffer.data(),
-            inputBuffer.size(),
-            m_inputShape.data(),
-            m_inputShape.size(),
-            m_inputDataType
-        );
-
-       
-
-        // Bind tensors
-        Ort::MemoryInfo memoryInfo0 = Ort::MemoryInfo::CreateCpu(OrtArenaAllocator, OrtMemTypeDefault);
-        Ort::Allocator allocator0(m_session, memoryInfo0);
-        auto inputName = m_session.GetInputNameAllocated(0, allocator0);
-        auto bindings = Ort::IoBinding::IoBinding(m_session);
-        try {
-           
-            bindings.BindInput(inputName.get(), inputTensor);
-        }
-        catch (const std::runtime_error& re) {
-            const char* err = re.what();
-            MessageBoxA(0, err, "Error loading model", MB_YESNO);
-            std::cerr << "Runtime error: " << re.what() << std::endl;
-            exit(1);
-        }
-        // Create output tensor(s) and bind
-        auto tensors = m_session.GetOutputCount();
-        std::vector<std::string> output_names;
-        std::vector<std::vector<int64_t>> output_shapes;
-        for (int i = 0; i < tensors; i++)
-        {
-            auto output_name = m_session.GetOutputNameAllocated(i, allocator0);
-            output_names.push_back(output_name.get());
-            auto type_info = m_session.GetOutputTypeInfo(i);
-            auto tensor_info = type_info.GetTensorTypeAndShapeInfo();
-            auto shape = tensor_info.GetShape();
-            output_shapes.push_back(shape);
-            bindings.BindOutput(output_names.back().c_str(), memoryInfo2);
-        }
-        HRESULT hr0;
-        try {
-            // Record start
-            //auto start = std::chrono::high_   resolution_clock::now();
-
-            // Run the session to get inference results.
-            Ort::RunOptions runOpts;
-            m_session.Run(runOpts, bindings);
-            
-            hr0 = m_d3dDevice->GetDeviceRemovedReason();
-
-            bindings.SynchronizeOutputs();
-        }
-        catch (const std::runtime_error& re) {
-            const char* err = re.what();
-            MessageBoxA(0, err, "Error loading model", MB_YESNO);
-            std::cerr << "Runtime error: " << re.what() << std::endl;
-            exit(1);
-        }
-        catch (const std::exception& ex)
-        {
-            const char* err = ex.what();
-            MessageBoxA(0, err, "Error loading model", MB_YESNO);
-            std::cerr << "Error occurred: " << ex.what() << std::endl;
-            exit(1);
-        }
-
-
-        try {
-
-            THROW_IF_FAILED(m_d3dDevice->GetDeviceRemovedReason());
-        }
-        catch (const std::exception & ex)
-        {
-            const char* err = ex.what();
-            MessageBoxA(0, err, "Error loading model", MB_YESNO);
-            std::cerr << "Error occurred: " << ex.what() << std::endl;
-            exit(1);
-            //extern void MyDeviceRemovedHandler(ID3D12Device * pDevice);
-            //MyDeviceRemovedHandler(m_d3dDevice.Get());
-        }
-        // Queue fence, and wait for completion
-
-        ComPtr<ID3D12Fence> fence;
-        THROW_IF_FAILED(m_d3dDevice->CreateFence(0, D3D12_FENCE_FLAG_NONE, IID_PPV_ARGS(fence.GetAddressOf())));
-        THROW_IF_FAILED(m_commandQueue->Signal(fence.Get(), 1));
-
-        wil::unique_handle fenceEvent(CreateEvent(nullptr, FALSE, FALSE, nullptr));
-        THROW_IF_FAILED(fence->SetEventOnCompletion(1, fenceEvent.get()));
-        THROW_HR_IF(E_FAIL, WaitForSingleObject(fenceEvent.get(), INFINITE) != WAIT_OBJECT_0);
-    
-        std::vector<const std::byte*> outputData;
-        int  i = 0;
-        for (int i = 0; i < tensors; i++)
-        {
-            const std::byte* outputBuffer = reinterpret_cast<const std::byte*>(bindings.GetOutputValues()[i].GetTensorRawData());
-            outputData.push_back(outputBuffer);
-        }
-
-        auto end = std::chrono::high_resolution_clock::now();
-        m_inference_duration = end - start;
-
-        if (outputData.size() > 0)
-        {
-            // Record start
-            auto start = std::chrono::high_resolution_clock::now();
-            m_preds.clear();
-
-            if (outputData.size() == 1)
-                GetPredictions(outputData[0], output_shapes[0]);
-            else if (outputData.size() == 2 && output_names[0] == "box_coords" && output_names[1] == "box_scores")
-            {
-                // mediapipe onnx model?
-                GetFaces(outputData, output_shapes);
-            }
-            else if (outputData.size() == 3)
-                GetPredictions(outputData, output_shapes);
-
-            // Readback the raw data from the model, compute the model's predictions, and render the bounding boxes
-            {
-                PIXBeginEvent(commandList, PIX_COLOR_DEFAULT, L"Render predictions");
-
-                // Print some debug information about the predictions
-#if 0
-                std::stringstream ss;
-                Format(ss, "# of predictions: ", m_preds.size(), "\n");
-
-                for (const auto& pred : m_preds)
-                {
-                    const char* className = YoloV4Constants::c_classes[pred.predictedClass];
-                    int xmin = static_cast<int>(std::round(pred.xmin));
-                    int ymin = static_cast<int>(std::round(pred.ymin));
-                    int xmax = static_cast<int>(std::round(pred.xmax));
-                    int ymax = static_cast<int>(std::round(pred.ymax));
-
-                    Format(ss, "  ", className, ": score ", pred.score, ", box (", xmin, ",", ymin, "),(", xmax, ",", ymax, ")\n");
-                }
-                OutputDebugStringA(ss.str().c_str());
-#endif
-                commandList->RSSetViewports(1, &viewport);
-                commandList->RSSetScissorRects(1, &scissorRect);
-
-                // Draw bounding box outlines
-                m_lineEffect->Apply(commandList);
-                m_lineBatch->Begin(commandList);
-                float label_height = 5.0f;
-                float dx = 5.0f;
-
-                for (auto& pred : m_preds)
-                {
-                    if (pred.predictedClass < 0)
-                    {
-                        label_height = 1.0f;
-                        dx = 2.0f;
-                    }
-
-
-                    m_lineEffect->SetAlpha(0.75f /*pred.score / 5.0*/);
-                   
-                    //DirectX::XMVECTORF32 White = { { { 0.980392158f, 0.980392158f, 0.980392158f, 1.0f} } }; // #fafafa
-                    //DirectX::XMVECTORF32 White = { { { .0f, 0.980392158f, .0f, 1.0f} } }; // #fafafa
-                    int col = colors[((pred.predictedClass < 0) ? 0 : pred.predictedClass) % 20];
-                    DirectX::XMVECTORF32 White = { { { (col >> 16) / 255.0f, ((col >> 8) & 0xff) / 255.0f, (col&0xff)/255.0f, 1.0f} } }; // #fafafa
-                    for (int i = 0; i < 2; i++)
-                    {
-                        DirectX::XMVECTORF32 White = { { { (col >> 16) / 255.0f, ((col >> 8) & 0xff) / 255.0f, (col & 0xff) / 255.0f, 1.0f} } }; // #fafafa
-                        if (i == 1)
-                            White = { { { (col >> 16) / 255.0f, ((col >> 8) & 0xff) / 255.0f, (col & 0xff) / 255.0f, 1.0f} } }; // #fafafa
-                        {
-                            VertexPositionColor upperLeft(SimpleMath::Vector3(pred.xmin, pred.ymin, 0.f), White);
-                            VertexPositionColor upperRight(SimpleMath::Vector3(pred.xmax, pred.ymin, 0.f), White);
-                            VertexPositionColor lowerRight(SimpleMath::Vector3(pred.xmax, pred.ymin + label_height * dx, 0.f), White);
-                            VertexPositionColor lowerLeft(SimpleMath::Vector3(pred.xmin, pred.ymin + label_height * dx, 0.f), White);
-                            m_lineBatch->DrawQuad(upperLeft, upperRight, lowerRight, lowerLeft);
-                        }
-
-                        {
-                            VertexPositionColor upperLeft(SimpleMath::Vector3(pred.xmin, pred.ymin + dx, 0.f), White);
-                            VertexPositionColor upperRight(SimpleMath::Vector3(pred.xmin + dx, pred.ymin + dx, 0.f), White);
-                            VertexPositionColor lowerRight(SimpleMath::Vector3(pred.xmin + dx, pred.ymax - dx, 0.f), White);
-                            VertexPositionColor lowerLeft(SimpleMath::Vector3(pred.xmin, pred.ymax - dx, 0.f), White);
-                            m_lineBatch->DrawQuad(upperLeft, upperRight, lowerRight, lowerLeft);
-                        }
-                        {
-
-                            VertexPositionColor upperLeft(SimpleMath::Vector3(pred.xmin, pred.ymax - dx, 0.f), White);
-                            VertexPositionColor upperRight(SimpleMath::Vector3(pred.xmax - dx, pred.ymax - dx, 0.f), White);
-                            VertexPositionColor lowerRight(SimpleMath::Vector3(pred.xmax - dx, pred.ymax, 0.f), White);
-                            VertexPositionColor lowerLeft(SimpleMath::Vector3(pred.xmin, pred.ymax, 0.f), White);
-                            m_lineBatch->DrawQuad(upperLeft, upperRight, lowerRight, lowerLeft);
-                        }
-                        {
-                            VertexPositionColor upperLeft(SimpleMath::Vector3(pred.xmax - dx, pred.ymin + dx, 0.f), White);
-                            VertexPositionColor upperRight(SimpleMath::Vector3(pred.xmax, pred.ymin + dx, 0.f), White);
-                            VertexPositionColor lowerRight(SimpleMath::Vector3(pred.xmax, pred.ymax, 0.f), White);
-                            VertexPositionColor lowerLeft(SimpleMath::Vector3(pred.xmax - dx, pred.ymax, 0.f), White);
-                            m_lineBatch->DrawQuad(upperLeft, upperRight, lowerRight, lowerLeft);
-                        }
-                    }
-
-                    for (auto p : pred.m_keypoints)
-                    {
-                        DirectX::XMVECTORF32 KeyColor = { {  {0.0f, 1.0f, .0f, 1.0f} } }; // # green
-                        float dx = 3.0f;
-                        VertexPositionColor upperLeft(SimpleMath::Vector3(p.first - dx, p.second - dx, 0.f), KeyColor);
-                        VertexPositionColor upperRight(SimpleMath::Vector3(p.first + dx, p.second - dx, 0.f), KeyColor);
-                        VertexPositionColor lowerRight(SimpleMath::Vector3(p.first + dx, p.second + dx, 0.f), KeyColor);
-                        VertexPositionColor lowerLeft(SimpleMath::Vector3(p.first - dx, p.second + dx, 0.f), KeyColor);
-                        m_lineBatch->DrawQuad(upperLeft, upperRight, lowerRight, lowerLeft);
-
-
-                    }
-                    /*
-                       VertexPositionColor upperLeft(SimpleMath::Vector3(pred.xmin, pred.ymin, 0.f), White);
-                        VertexPositionColor upperRight(SimpleMath::Vector3(pred.xmax, pred.ymin, 0.f), White);
-                        VertexPositionColor lowerLeft(SimpleMath::Vector3(pred.xmin, pred.ymax, 0.f), White);
-                        VertexPositionColor lowerRight(SimpleMath::Vector3(pred.xmax, pred.ymax, 0.f), White);
-                        m_lineBatch->DrawQuad(upperLeft, upperRight, lowerRight, lowerLeft);
-                     */
-                    //m_lineBatch->DrawLine(upperLeft, upperRight);
-                    //m_lineBatch->DrawLine(upperRight, lowerRight);
-                    //m_lineBatch->DrawLine(lowerRight, lowerLeft);
-                    //m_lineBatch->DrawLine(lowerLeft, upperLeft);
-
-
-
-                    
-                }
-                m_lineBatch->End();
-
-                // Draw predicted class labels
-                m_spriteBatch->Begin(commandList);
-                for (const auto& pred : m_preds)
-                {
-                    if (pred.predictedClass >= 0)
-                    {
-                        const char* classText = YoloV4Constants::c_classes[pred.predictedClass];
-                        std::wstring classTextW(classText, classText + strlen(classText));
-
-                        // Render a drop shadow by drawing the text twice with a slight offset.
-                        DX::DrawControllerString(m_spriteBatch.get(), m_legendFont.get(), m_ctrlFont.get(),
-                            classTextW.c_str(), SimpleMath::Vector2(pred.xmin, pred.ymin - 1.5f * dx) + SimpleMath::Vector2(2.f, 2.f), SimpleMath::Vector4(0.0f, 0.0f, 0.0f, 0.25f));
-                        DX::DrawControllerString(m_spriteBatch.get(), m_legendFont.get(), m_ctrlFont.get(),
-                            classTextW.c_str(), SimpleMath::Vector2(pred.xmin, pred.ymin - 1.5f * dx), ATG::Colors::DarkGrey);
-                    }
-                }
-                m_spriteBatch->End();
-
-                PIXEndEvent(commandList);
-            }
-            auto end = std::chrono::high_resolution_clock::now();
-            m_output_duration = end - start;
-        }
     }
 
     // Show the new frame.
@@ -1486,8 +2690,92 @@ void Sample::Render()
     PIXEndEvent(m_deviceResources->GetCommandQueue());
 
     m_graphicsMemory->Commit(m_deviceResources->GetCommandQueue());
+
+    
 }
 
+
+void Sample::NewTexture(const uint8_t* image_data, uint32_t width, uint32_t height)
+{
+    auto device = m_deviceResources->GetD3DDevice();
+    auto commandList = m_deviceResources->GetCommandList();
+    commandList->Reset(m_deviceResources->GetCommandAllocator(), nullptr);
+
+    ComPtr<ID3D12Resource> textureUploadHeap;
+
+    D3D12_RESOURCE_DESC txtDesc = {};
+    bool new_texture = false;
+    auto desc = m_texture.Get()->GetDesc();
+    if (desc.Width != width || desc.Height != height)
+    {
+
+        txtDesc.MipLevels = txtDesc.DepthOrArraySize = 1;
+        txtDesc.Format = DXGI_FORMAT_B8G8R8A8_UNORM;
+        txtDesc.SampleDesc.Count = 1;
+        txtDesc.Dimension = D3D12_RESOURCE_DIMENSION_TEXTURE2D;
+
+
+        txtDesc.Width = width;
+        txtDesc.Height = height;
+
+        //m_origTextureWidth = width;
+        //m_origTextureHeight = height;
+
+       // wait for gpu to create new textures
+        m_deviceResources->WaitForGpu();
+
+        DX::ThrowIfFailed(
+            device->CreateCommittedResource(
+                &CD3DX12_HEAP_PROPERTIES(D3D12_HEAP_TYPE_DEFAULT),
+                D3D12_HEAP_FLAG_NONE,
+                &txtDesc,
+                D3D12_RESOURCE_STATE_COPY_DEST,
+                nullptr,
+                IID_PPV_ARGS(m_texture.ReleaseAndGetAddressOf())));
+        new_texture = true;
+        if (new_texture)
+        {
+            // Describe and create a SRV for the texture.
+            D3D12_SHADER_RESOURCE_VIEW_DESC srvDesc = {};
+            srvDesc.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
+            srvDesc.Format = txtDesc.Format;
+            srvDesc.ViewDimension = D3D12_SRV_DIMENSION_TEXTURE2D;
+            srvDesc.Texture2D.MipLevels = 1;
+            device->CreateShaderResourceView(m_texture.Get(), &srvDesc, m_SRVDescriptorHeap->GetCpuHandle(e_outputTensor));
+        }
+
+    }
+    else
+        txtDesc = desc;
+    const UINT64 uploadBufferSize = GetRequiredIntermediateSize(m_texture.Get(), 0, 1);
+
+    // Create the GPU upload buffer.
+    DX::ThrowIfFailed(
+        device->CreateCommittedResource(
+            &CD3DX12_HEAP_PROPERTIES(D3D12_HEAP_TYPE_UPLOAD),
+            D3D12_HEAP_FLAG_NONE,
+            &CD3DX12_RESOURCE_DESC::Buffer(uploadBufferSize),
+            D3D12_RESOURCE_STATE_GENERIC_READ,
+            nullptr,
+            IID_PPV_ARGS(textureUploadHeap.GetAddressOf())));
+
+    D3D12_SUBRESOURCE_DATA textureData = {};
+    textureData.pData = image_data;
+    textureData.RowPitch = static_cast<LONG_PTR>(txtDesc.Width * sizeof(uint32_t));
+    textureData.SlicePitch = width * height * 4;
+
+    UpdateSubresources(commandList, m_texture.Get(), textureUploadHeap.Get(), 0, 0, 1, &textureData);
+    commandList->ResourceBarrier(1, &CD3DX12_RESOURCE_BARRIER::Transition(m_texture.Get(), D3D12_RESOURCE_STATE_COPY_DEST, D3D12_RESOURCE_STATE_GENERIC_READ));
+   
+    DX::ThrowIfFailed(commandList->Close());
+    m_deviceResources->GetCommandQueue()->ExecuteCommandLists(1, CommandListCast(&commandList));
+
+    // Wait until assets have been uploaded to the GPU.
+    m_deviceResources->WaitForGpu();
+
+
+
+}
 
 // Helper method to clear the back buffers.
 void Sample::Clear()
@@ -1599,7 +2887,7 @@ void Sample::CreateTextureResources()
 
         // Nearest neighbor sampling
         D3D12_STATIC_SAMPLER_DESC samplerDesc = {};
-        samplerDesc.Filter = D3D12_FILTER_MIN_MAG_MIP_POINT;
+        samplerDesc.Filter = D3D12_FILTER_ANISOTROPIC;// D3D12_FILTER_MIN_MAG_MIP_POINT;
         samplerDesc.AddressU = D3D12_TEXTURE_ADDRESS_MODE_WRAP;
         samplerDesc.AddressV = D3D12_TEXTURE_ADDRESS_MODE_WRAP;
         samplerDesc.AddressW = D3D12_TEXTURE_ADDRESS_MODE_WRAP;
@@ -1634,7 +2922,7 @@ void Sample::CreateTextureResources()
                 IID_PPV_ARGS(m_texRootSignatureNN.ReleaseAndGetAddressOf())));
 
         // Bilinear sampling
-        samplerDesc.Filter = D3D12_FILTER_MIN_MAG_MIP_LINEAR;
+        samplerDesc.Filter = D3D12_FILTER_ANISOTROPIC;
         rootSignatureDesc.Init(1, &rp, 1, &samplerDesc,
             D3D12_ROOT_SIGNATURE_FLAG_ALLOW_INPUT_ASSEMBLER_INPUT_LAYOUT
             | D3D12_ROOT_SIGNATURE_FLAG_DENY_DOMAIN_SHADER_ROOT_ACCESS
@@ -1675,7 +2963,8 @@ void Sample::CreateTextureResources()
         psoDesc.VS = { vertexShaderBlob.data(), vertexShaderBlob.size() };
         psoDesc.PS = { pixelShaderBlob.data(), pixelShaderBlob.size() };
         psoDesc.RasterizerState = CD3DX12_RASTERIZER_DESC(D3D12_DEFAULT);
-        psoDesc.BlendState = CD3DX12_BLEND_DESC(D3D12_DEFAULT);
+       
+        //psoDesc.BlendState = CD3DX12_BLEND_DESC(D3D12_DEFAULT);
         psoDesc.DepthStencilState.DepthEnable = FALSE;
         psoDesc.DepthStencilState.StencilEnable = FALSE;
         psoDesc.DSVFormat = m_deviceResources->GetDepthBufferFormat();
@@ -1684,6 +2973,20 @@ void Sample::CreateTextureResources()
         psoDesc.NumRenderTargets = 1;
         psoDesc.RTVFormats[0] = m_deviceResources->GetBackBufferFormat();
         psoDesc.SampleDesc.Count = 1;
+
+        D3D12_BLEND_DESC blendDesc{};
+        blendDesc.RenderTarget[0].BlendEnable = true;
+        blendDesc.RenderTarget[0].BlendOp = D3D12_BLEND_OP_ADD;
+        blendDesc.RenderTarget[0].SrcBlend = D3D12_BLEND_SRC_ALPHA;
+        blendDesc.RenderTarget[0].DestBlend = D3D12_BLEND_INV_SRC_ALPHA;
+        blendDesc.RenderTarget[0].SrcBlendAlpha = D3D12_BLEND_ONE;
+        blendDesc.RenderTarget[0].DestBlendAlpha = D3D12_BLEND_ZERO;
+        blendDesc.RenderTarget[0].LogicOpEnable = false;
+        blendDesc.RenderTarget[0].BlendOpAlpha = D3D12_BLEND_OP_ADD;
+        blendDesc.RenderTarget[0].RenderTargetWriteMask = D3D12_COLOR_WRITE_ENABLE_ALL;
+        psoDesc.BlendState  = blendDesc;
+
+
         DX::ThrowIfFailed(
             device->CreateGraphicsPipelineState(&psoDesc,
                 IID_PPV_ARGS(m_texPipelineStateNN.ReleaseAndGetAddressOf())));
@@ -1815,7 +3118,7 @@ void Sample::CreateTextureResources()
 
         CreateShaderResourceView(device, m_videoTexture.Get(), m_SRVDescriptorHeap->GetCpuHandle(e_descTexture));
     }
-#else
+//#else
     // Create static texture.
     {
         auto commandList = m_deviceResources->GetCommandList();
@@ -1834,8 +3137,11 @@ void Sample::CreateTextureResources()
 
         UINT width, height;
         auto image = LoadBGRAImage(buff, width, height);
-        txtDesc.Width = m_origTextureWidth = width;
-        txtDesc.Height = m_origTextureHeight = height;
+        txtDesc.Width =  width;
+        txtDesc.Height =  height;
+
+        //m_origTextureWidth = width;
+        //m_origTextureHeight = height;
 
         DX::ThrowIfFailed(
             device->CreateCommittedResource(
@@ -1872,7 +3178,7 @@ void Sample::CreateTextureResources()
         srvDesc.Format = txtDesc.Format;
         srvDesc.ViewDimension = D3D12_SRV_DIMENSION_TEXTURE2D;
         srvDesc.Texture2D.MipLevels = 1;
-        device->CreateShaderResourceView(m_texture.Get(), &srvDesc, m_SRVDescriptorHeap->GetCpuHandle(e_descTexture));
+        device->CreateShaderResourceView(m_texture.Get(), &srvDesc, m_SRVDescriptorHeap->GetCpuHandle(e_outputTensor));
     
         DX::ThrowIfFailed(commandList->Close());
         m_deviceResources->GetCommandQueue()->ExecuteCommandLists(1, CommandListCast(&commandList));
@@ -1886,19 +3192,33 @@ void Sample::CreateTextureResources()
 void Sample::CreateUIResources()
 {
     auto device = m_deviceResources->GetD3DDevice();
-    
+    const int DefaultBatchSize = 4096 * 3;
     m_lineBatch = std::make_unique<PrimitiveBatch<VertexPositionColor>>(device);
+    m_lineBatch2 = std::make_unique<PrimitiveBatch<VertexPositionColor>>(device, DefaultBatchSize * 3, DefaultBatchSize);
 
     RenderTargetState rtState(m_deviceResources->GetBackBufferFormat(), m_deviceResources->GetDepthBufferFormat());
+
     EffectPipelineStateDescription epd(&VertexPositionColor::InputLayout, CommonStates::AlphaBlend,
         CommonStates::DepthDefault, CommonStates::CullNone, rtState, D3D12_PRIMITIVE_TOPOLOGY_TYPE_LINE);
+
+
     m_lineEffect = std::make_unique<BasicEffect>(device, EffectFlags::VertexColor, epd);
+
+    CD3DX12_RASTERIZER_DESC rastDesc(D3D12_FILL_MODE_SOLID,
+        D3D12_CULL_MODE_NONE, FALSE,
+        D3D12_DEFAULT_DEPTH_BIAS, D3D12_DEFAULT_DEPTH_BIAS_CLAMP,
+        D3D12_DEFAULT_SLOPE_SCALED_DEPTH_BIAS, TRUE, FALSE, TRUE,
+        0, D3D12_CONSERVATIVE_RASTERIZATION_MODE_OFF);
+    EffectPipelineStateDescription epd2(&VertexPositionColor::InputLayout, CommonStates::AlphaBlend,
+        CommonStates::DepthDefault, rastDesc, rtState, D3D12_PRIMITIVE_TOPOLOGY_TYPE_TRIANGLE);
+    m_lineEffect2 = std::make_unique<BasicEffect>(device, EffectFlags::VertexColor, epd2);
 
     SpriteBatchPipelineStateDescription spd(rtState, &CommonStates::AlphaBlend);
     ResourceUploadBatch uploadBatch(device);
     uploadBatch.Begin();
 
     m_spriteBatch = std::make_unique<SpriteBatch>(device, uploadBatch, spd);
+    m_sprite = std::make_unique<SpriteBatch>(device, uploadBatch, spd);
 
     wchar_t strFilePath[MAX_PATH] = {};
     DX::FindMediaFile(strFilePath, MAX_PATH, L"SegoeUI_30.spritefont");
@@ -1937,6 +3257,7 @@ void Sample::CreateWindowSizeDependentResources()
     auto proj = DirectX::SimpleMath::Matrix::CreateOrthographicOffCenter(0.f, static_cast<float>(viewport.Width),
         static_cast<float>(viewport.Height), 0.f, 0.f, 1.f);
     m_lineEffect->SetProjection(proj);
+    m_lineEffect2->SetProjection(proj);
 
     m_spriteBatch->SetViewport(viewport);
 }
@@ -1948,6 +3269,7 @@ void Sample::OnDeviceLost()
 {
     m_lineEffect.reset();
     m_lineBatch.reset();
+    m_lineBatch2.reset();
     m_spriteBatch.reset();
     m_labelFont.reset();
     m_labelFontBold.reset();

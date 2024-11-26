@@ -1,6 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
 <Project DefaultTargets="Build" ToolsVersion="15.0" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
-  <Import Project="packages\Microsoft.AI.MachineLearning.1.20.0\build\native\Microsoft.AI.MachineLearning.props" Condition="Exists('packages\Microsoft.AI.MachineLearning.1.20.0\build\native\Microsoft.AI.MachineLearning.props')" />
+  <Import Project="packages\Microsoft.AI.MachineLearning.1.20.1\build\native\Microsoft.AI.MachineLearning.props" Condition="Exists('packages\Microsoft.AI.MachineLearning.1.20.1\build\native\Microsoft.AI.MachineLearning.props')" />
   <Import Project="packages\Microsoft.AI.DirectML.1.15.4\build\Microsoft.AI.DirectML.props" Condition="Exists('packages\Microsoft.AI.DirectML.1.15.4\build\Microsoft.AI.DirectML.props')" />
   <ItemGroup Label="ProjectConfigurations">
     <ProjectConfiguration Include="Debug|ARM">
@@ -154,6 +154,9 @@
   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Release|ARM64'">
     <LinkIncremental>false</LinkIncremental>
   </PropertyGroup>
+  <PropertyGroup Label="Vcpkg">
+    <VcpkgEnabled>false</VcpkgEnabled>
+  </PropertyGroup>
   <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Debug|Win32'">
     <ClCompile>
       <PrecompiledHeader>Use</PrecompiledHeader>
@@ -235,7 +238,7 @@ copy $(ProjectDir)data\. $(OutDir)data</Command>
       <ConformanceMode>false</ConformanceMode>
       <PrecompiledHeaderFile>pch.h</PrecompiledHeaderFile>
       <TreatWarningAsError>false</TreatWarningAsError>
-      <AdditionalIncludeDirectories>$(ProjectDir);Kits\DirectXTK12\Inc;Kits\ATGTK;$(ProjectDir)..\..\Libraries\;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <AdditionalIncludeDirectories>$(ProjectDir);Kits\DirectXTK12\Inc;Kits\ATGTK;$(ProjectDir)..\..\Libraries\;vcpkg_installed\ARM64-windows\include;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
       <LanguageStandard>stdcpp17</LanguageStandard>
       <DisableSpecificWarnings>4238;4201;4100</DisableSpecificWarnings>
     </ClCompile>
@@ -243,6 +246,7 @@ copy $(ProjectDir)data\. $(OutDir)data</Command>
       <SubSystem>Windows</SubSystem>
       <GenerateDebugInformation>DebugFull</GenerateDebugInformation>
       <AdditionalDependencies>$(RuntimesDirectory)\onnxruntime.lib;d3d12.lib;dxgi.lib;dxguid.lib;d3d11.lib;uuid.lib;kernel32.lib;user32.lib;gdi32.lib;winspool.lib;comdlg32.lib;advapi32.lib;shell32.lib;ole32.lib;oleaut32.lib;mfplat.lib;odbc32.lib;odbccp32.lib;runtimeobject.lib;%(AdditionalDependencies)</AdditionalDependencies>
+      <AdditionalLibraryDirectories>vcpkg_installed\ARM64-windows\lib</AdditionalLibraryDirectories>
     </Link>
     <PostBuildEvent>
       <Command>mkdir $(OutDir)data
@@ -343,7 +347,7 @@ copy $(ProjectDir)data\. $(OutDir)data</Command>
       <PreprocessorDefinitions>NDEBUG;_WINDOWS;%(PreprocessorDefinitions)</PreprocessorDefinitions>
       <ConformanceMode>false</ConformanceMode>
       <PrecompiledHeaderFile>pch.h</PrecompiledHeaderFile>
-      <AdditionalIncludeDirectories>$(ProjectDir);Kits\DirectXTK12\Inc;Kits\ATGTK;$(ProjectDir)..\..\Libraries\;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <AdditionalIncludeDirectories>$(ProjectDir);Kits\DirectXTK12\Inc;Kits\ATGTK;$(ProjectDir)..\..\Libraries\;vcpkg_installed\ARM64-windows\include;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
       <LanguageStandard>stdcpp17</LanguageStandard>
       <DisableSpecificWarnings>4238;4201;4100</DisableSpecificWarnings>
     </ClCompile>
@@ -353,6 +357,7 @@ copy $(ProjectDir)data\. $(OutDir)data</Command>
       <OptimizeReferences>true</OptimizeReferences>
       <GenerateDebugInformation>true</GenerateDebugInformation>
       <AdditionalDependencies>$(RuntimesDirectory)\onnxruntime.lib;d3d12.lib;dxgi.lib;dxguid.lib;d3d11.lib;uuid.lib;kernel32.lib;user32.lib;gdi32.lib;winspool.lib;comdlg32.lib;advapi32.lib;shell32.lib;ole32.lib;oleaut32.lib;mfplat.lib;odbc32.lib;odbccp32.lib;runtimeobject.lib;%(AdditionalDependencies)</AdditionalDependencies>
+      <AdditionalLibraryDirectories>.\vcpkg_installed\ARM64-windows\lib</AdditionalLibraryDirectories>
     </Link>
     <PostBuildEvent>
       <Command>mkdir $(OutDir)data
@@ -360,19 +365,25 @@ copy $(ProjectDir)data\. $(OutDir)data</Command>
     </PostBuildEvent>
   </ItemDefinitionGroup>
   <ItemGroup>
+    <ClInclude Include="depixelator.h" />
     <ClInclude Include="DeviceResources.h" />
+    <ClInclude Include="earcut.hpp" />
     <ClInclude Include="FileDialog.h" />
     <ClInclude Include="Kits\ATGTK\ATGColors.h" />
     <ClInclude Include="Kits\ATGTK\ControllerFont.h" />
     <ClInclude Include="Kits\ATGTK\d3dx12.h" />
     <ClInclude Include="Kits\ATGTK\FindMedia.h" />
     <ClInclude Include="Kits\ATGTK\ReadData.h" />
+    <ClInclude Include="LineSegment.h" />
     <ClInclude Include="MediaEnginePlayer.h" />
     <ClInclude Include="pch.h" />
+    <ClInclude Include="Polyline2D.h" />
+    <ClInclude Include="polypartition.h" />
     <ClInclude Include="resource.h" />
     <ClInclude Include="ssd_anchors.h" />
     <ClInclude Include="StepTimer.h" />
     <ClInclude Include="TensorHelper.h" />
+    <ClInclude Include="Vec2.h" />
     <ClInclude Include="yolov9npu.h" />
   </ItemGroup>
   <ItemGroup>
@@ -390,6 +401,7 @@ copy $(ProjectDir)data\. $(OutDir)data</Command>
       <PrecompiledHeader Condition="'$(Configuration)|$(Platform)'=='Release|x64'">Create</PrecompiledHeader>
       <PrecompiledHeader Condition="'$(Configuration)|$(Platform)'=='Release|ARM64'">Create</PrecompiledHeader>
     </ClCompile>
+    <ClCompile Include="polypartition.cpp" />
     <ClCompile Include="ssd_anchors.cpp" />
     <ClCompile Include="TensorHelper.cpp" />
     <ClCompile Include="yolov9npu.cpp" />
@@ -522,8 +534,8 @@ copy $(ProjectDir)data\. $(OutDir)data</Command>
   <ImportGroup Label="ExtensionTargets">
     <Import Project="packages\Microsoft.AI.DirectML.1.15.4\build\Microsoft.AI.DirectML.targets" Condition="Exists('packages\Microsoft.AI.DirectML.1.15.4\build\Microsoft.AI.DirectML.targets')" />
     <Import Project="packages\WinPixEventRuntime.1.0.240308001\build\WinPixEventRuntime.targets" Condition="Exists('packages\WinPixEventRuntime.1.0.240308001\build\WinPixEventRuntime.targets')" />
-    <Import Project="packages\Microsoft.AI.MachineLearning.1.20.0\build\native\Microsoft.AI.MachineLearning.targets" Condition="Exists('packages\Microsoft.AI.MachineLearning.1.20.0\build\native\Microsoft.AI.MachineLearning.targets')" />
     <Import Project="packages\Microsoft.Windows.ImplementationLibrary.1.0.240803.1\build\native\Microsoft.Windows.ImplementationLibrary.targets" Condition="Exists('packages\Microsoft.Windows.ImplementationLibrary.1.0.240803.1\build\native\Microsoft.Windows.ImplementationLibrary.targets')" />
+    <Import Project="packages\Microsoft.AI.MachineLearning.1.20.1\build\native\Microsoft.AI.MachineLearning.targets" Condition="Exists('packages\Microsoft.AI.MachineLearning.1.20.1\build\native\Microsoft.AI.MachineLearning.targets')" />
   </ImportGroup>
   <Target Name="DownloadContentFiles" BeforeTargets="PrepareForBuild" Condition="!Exists('Data\Model_Yolo_v9c_f16.onnx')">
     <DownloadFile SourceUrl="https://drive.usercontent.google.com/download?id=1Yzu-vlH0mw2Jz8yBkkh12xuoDEDesDhN" DestinationFolder="$(MSBuildProjectDirectory)\Data" DestinationFileName="Model_Yolo_v9c_f16.onnx">
@@ -539,8 +551,8 @@ copy $(ProjectDir)data\. $(OutDir)data</Command>
     <Error Condition="!Exists('packages\Microsoft.AI.DirectML.1.15.4\build\Microsoft.AI.DirectML.props')" Text="$([System.String]::Format('$(ErrorText)', 'packages\Microsoft.AI.DirectML.1.15.4\build\Microsoft.AI.DirectML.props'))" />
     <Error Condition="!Exists('packages\Microsoft.AI.DirectML.1.15.4\build\Microsoft.AI.DirectML.targets')" Text="$([System.String]::Format('$(ErrorText)', 'packages\Microsoft.AI.DirectML.1.15.4\build\Microsoft.AI.DirectML.targets'))" />
     <Error Condition="!Exists('packages\WinPixEventRuntime.1.0.240308001\build\WinPixEventRuntime.targets')" Text="$([System.String]::Format('$(ErrorText)', 'packages\WinPixEventRuntime.1.0.240308001\build\WinPixEventRuntime.targets'))" />
-    <Error Condition="!Exists('packages\Microsoft.AI.MachineLearning.1.20.0\build\native\Microsoft.AI.MachineLearning.props')" Text="$([System.String]::Format('$(ErrorText)', 'packages\Microsoft.AI.MachineLearning.1.20.0\build\native\Microsoft.AI.MachineLearning.props'))" />
-    <Error Condition="!Exists('packages\Microsoft.AI.MachineLearning.1.20.0\build\native\Microsoft.AI.MachineLearning.targets')" Text="$([System.String]::Format('$(ErrorText)', 'packages\Microsoft.AI.MachineLearning.1.20.0\build\native\Microsoft.AI.MachineLearning.targets'))" />
     <Error Condition="!Exists('packages\Microsoft.Windows.ImplementationLibrary.1.0.240803.1\build\native\Microsoft.Windows.ImplementationLibrary.targets')" Text="$([System.String]::Format('$(ErrorText)', 'packages\Microsoft.Windows.ImplementationLibrary.1.0.240803.1\build\native\Microsoft.Windows.ImplementationLibrary.targets'))" />
+    <Error Condition="!Exists('packages\Microsoft.AI.MachineLearning.1.20.1\build\native\Microsoft.AI.MachineLearning.props')" Text="$([System.String]::Format('$(ErrorText)', 'packages\Microsoft.AI.MachineLearning.1.20.1\build\native\Microsoft.AI.MachineLearning.props'))" />
+    <Error Condition="!Exists('packages\Microsoft.AI.MachineLearning.1.20.1\build\native\Microsoft.AI.MachineLearning.targets')" Text="$([System.String]::Format('$(ErrorText)', 'packages\Microsoft.AI.MachineLearning.1.20.1\build\native\Microsoft.AI.MachineLearning.targets'))" />
   </Target>
 </Project>

@@ -9,6 +9,7 @@
 #include "StepTimer.h"
 #include "MediaEnginePlayer.h"
 #include "ssd_anchors.h"
+#include "depixelator.h"
 
 
 using UniqueNativePtr = std::unique_ptr<void, void (*)(void*)>;
@@ -42,6 +43,15 @@ struct Vec3
     Size z, y, x;
     Vec3(const T* data, Size z, Size y, Size x) : data(data), z(z), y(y), x(x) {}
     Vec2<T> operator[](Size i) const { return Vec2<T>(data + i * y * x, y, x); }
+};
+
+template <typename T>
+struct Vec4
+{
+    const T* data;
+    Size w, z, y, x;
+    Vec4(const T* data, Size w, Size z, Size y, Size x) : data(data), w(w), z(z), y(y), x(x) {}
+    Vec3<T> operator[](Size i) const { return Vec3<T>(data + i * z * y * x, z, y, x); }
 };
 
 struct Detection
@@ -197,6 +207,23 @@ struct Prediction
     float score;
     int32_t predictedClass;
     std::vector<std::pair<float, float> > m_keypoints;
+    int i, j;
+    std::vector<float> mask_weights;
+    depixelator::Polylines m_polylines;
+};
+
+struct Model_t
+{
+    std::wstring                                    m_modelfile;
+    Ort::Session                                    m_session{ nullptr };
+    Ort::Value                                      m_inputTensor{ nullptr };
+    Ort::Value                                      m_outputTensor{ nullptr };
+    std::vector<int64_t>                            m_inputShape;
+    std::vector<int64_t>                            m_outputShape;
+    ONNXTensorElementDataType                       m_inputDataType;
+    size_t                                          m_inputWidth;
+    size_t                                          m_inputHeight;
+    std::vector<std::byte>                          m_inputBuffer;
 };
 
 // A basic sample implementation that creates a D3D12 device and
@@ -209,7 +236,7 @@ public:
     ~Sample();
 
     // Initialization and management
-    bool Initialize(HWND window, int width, int height);
+    bool Initialize(HWND window, int width, int height, bool run_on_gpu = false);
 
     // Basic render loop
     void Tick();
@@ -225,8 +252,8 @@ public:
     void OnResuming();
     void OnWindowMoved();
     void OnWindowSizeChanged(int width, int height);
-    void OnNewFile(wchar_t* filename);
-    void OnNewMopdel(wchar_t* modelfile);
+    void OnNewFile(const wchar_t* filename);
+    void OnNewMopdel(const wchar_t* modelfile, bool bAddModel);
 
     // Properties
     void GetDefaultSize(int& width, int& height) const;
@@ -240,11 +267,14 @@ private:
 
     void CreateDeviceDependentResources();
     void CreateTextureResources();
-    void InitializeDirectMLResources(wchar_t* model_path = nullptr);
+    void InitializeDirectMLResources(const wchar_t* model_path = nullptr, bool Addmdodel = false);
     void CreateUIResources();
     void CreateWindowSizeDependentResources();
 
-    bool CopySharedVideoTextureTensor(std::vector<std::byte>& inputbuffer);
+    bool CopySharedVideoTextureTensor(std::vector<std::byte>& inputbuffer, Model_t* model);
+
+
+    void GetNonGraphicsAdapter(IDXCoreAdapterList* adapterList, IDXCoreAdapter** outAdapter);
 
     void InitializeDirectML(ID3D12Device1** d3dDeviceOut, ID3D12CommandQueue** commandQueueOut, IDMLDevice** dmlDeviceOut,
         ID3D12CommandAllocator** commandAllocatorOut,
@@ -266,14 +296,24 @@ private:
     // model.
 
     // objects
-    void GetPredictions(const std::byte* outputData, std::vector<int64_t> & shape);
-    void GetPredictions(std::vector<const std::byte*>& outputData, std::vector<std::vector<int64_t>>& shapes);
+    void GetPredictions(const std::byte* outputData, std::vector<int64_t> & shape, const  std::vector<std::string>& output_names, Model_t* model);
+    void GetPredictions(std::vector<const std::byte*>& outputData, std::vector<std::vector<int64_t>>& shapes, const  std::vector<std::string>& output_names, Model_t* model);
+    void GetPredictions2(std::vector<const std::byte*>& outputData, std::vector<std::vector<int64_t>>& shapes, const  std::vector<std::string>& output_names, Model_t* model);
 
     // faces
-    void GetFaces(std::vector<const std::byte*>& outputData, std::vector<std::vector<int64_t>>& shapes);
-    std::vector<onnxmediapipe::Anchor>              m_anchors;
-    
+    void GetFaces(std::vector<const std::byte*>& outputData, std::vector<std::vector<int64_t>>& shapes, Model_t* model);
+    typedef std::vector<onnxmediapipe::Anchor> Anchors;
+    std::vector<Anchors> m_anchors;
 
+    // image
+    void GetImage(const std::byte* outputData, std::vector<int64_t>& shape, Model_t* model, ONNXTensorElementDataType datatype);
+    void GetMask(const std::byte* outputData, std::vector<int64_t>& shape, Model_t* model, ONNXTensorElementDataType datatype);
+   
+    bool LoadTextureFromMemory(const std::byte* image_data, uint32_t width, uint32_t height, ID3D12Device* d3d_device, D3D12_CPU_DESCRIPTOR_HANDLE srv_cpu_handle, ID3D12Resource** out_tex_resource);
+    void NewTexture(const uint8_t * image_data, uint32_t width, uint32_t height);
+    // 
+    // 
+    bool                                            m_run_on_gpu;
     // 
     // Device resources
     std::unique_ptr<DX::DeviceResources>            m_deviceResources;
@@ -295,7 +335,9 @@ private:
     // UI
     SmoothedFPS                                     m_fps;
     std::unique_ptr<DirectX::BasicEffect>           m_lineEffect;
+    std::unique_ptr<DirectX::BasicEffect>           m_lineEffect2;
     std::unique_ptr<DirectX::PrimitiveBatch<DirectX::VertexPositionColor>> m_lineBatch;
+    std::unique_ptr<DirectX::PrimitiveBatch<DirectX::VertexPositionColor>> m_lineBatch2;
     std::unique_ptr<DirectX::DescriptorHeap>        m_fontDescriptorHeap;
     std::unique_ptr<DirectX::SpriteBatch>           m_spriteBatch;
     std::unique_ptr<DirectX::SpriteFont>            m_labelFont;
@@ -308,6 +350,7 @@ public:
     std::unique_ptr<MediaEnginePlayer>              m_player;
 private:
     HANDLE                                          m_sharedVideoTexture;
+    LONGLONG                                        m_pts = 0;
 
     // Direct3D 12 objects for rendering texture to screen
     Microsoft::WRL::ComPtr<ID3D12RootSignature>     m_texRootSignatureNN;           // Nearest-neighbor texture upscale
@@ -330,6 +373,7 @@ private:
     Microsoft::WRL::ComPtr<ID3D12RootSignature>     m_computeRootSignature;
 
     // DirectML objects
+    std::wstring                                    m_device_name;
     Microsoft::WRL::ComPtr<IDMLDevice>              m_dmlDevice;
     Microsoft::WRL::ComPtr<IDMLCommandRecorder>     m_dmlCommandRecorder;
 
@@ -358,17 +402,9 @@ private:
     Microsoft::WRL::ComPtr<IDMLOperatorInitializer> m_dmlOpInitializer;
 
 
-    std::wstring                                    m_modelfile;
     const OrtDmlApi* m_ortDmlApi{ nullptr };
-    Ort::Session                                    m_session{ nullptr };
-    Ort::Value                                      m_inputTensor{ nullptr };
-    Ort::Value                                      m_outputTensor{ nullptr };
-    //std::pair<Ort::Value, UniqueNativePtr>          m_output{ Ort::Value(), UniqueNativePtr() };
-    std::vector<int64_t>                            m_inputShape;
-    std::vector<int64_t>                            m_outputShape;
-    ONNXTensorElementDataType                       m_inputDataType;
-    size_t                                          m_inputWidth;
-    size_t                                          m_inputHeight;
+
+    std::vector<std::unique_ptr<Model_t>>           m_models;
 
     DWORD                                           m_dxgiFactoryFlags;
 
@@ -384,6 +420,13 @@ private:
     Microsoft::WRL::ComPtr<ID2D1Device7>            m_d2d1_device;
     Microsoft::WRL::ComPtr<ID2D1DeviceContext>      m_d2dContext;
 
+    std::unique_ptr<DirectX::SpriteBatch>           m_sprite; // output tensor image
+    Microsoft::WRL::ComPtr<ID3D12Resource>          m_output_texture;
+    std::vector<uint8_t>                            m_mask;
+    std::vector<uint8_t>                            m_pred_mask;
+    bool                                            m_mask_ready = false;
+    int                                             m_mask_width;
+    int                                             m_mask_height;
     //wil::unique_handle                              m_fenceEvent{ nullptr };
 
     // DirectX index enums
@@ -391,6 +434,7 @@ private:
     {
         e_descTexture,
         e_descModelInput,
+        e_outputTensor,
         e_srvDescCount
     };
 

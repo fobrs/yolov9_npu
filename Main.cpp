@@ -39,7 +39,7 @@ extern "C"
 int WINAPI wWinMain(_In_ HINSTANCE hInstance, _In_opt_ HINSTANCE hPrevInstance, _In_ LPWSTR lpCmdLine, _In_ int nCmdShow)
 {
     UNREFERENCED_PARAMETER(hPrevInstance);
-    UNREFERENCED_PARAMETER(lpCmdLine);
+    //UNREFERENCED_PARAMETER(lpCmdLine);
 
     if (!XMVerifyCPUSupport())
         return 1;
@@ -96,8 +96,11 @@ int WINAPI wWinMain(_In_ HINSTANCE hInstance, _In_opt_ HINSTANCE hPrevInstance, 
         SetWindowLongPtr(hwnd, GWLP_USERDATA, reinterpret_cast<LONG_PTR>(g_sample.get()) );
 
         GetClientRect(hwnd, &rc);
+        auto run_on_gpu = false;
+        if (wcsstr(lpCmdLine, L"gpu") > 0)
+            run_on_gpu = true;
 
-        if (!g_sample->Initialize(hwnd, rc.right - rc.left, rc.bottom - rc.top))
+        if (!g_sample->Initialize(hwnd, rc.right - rc.left, rc.bottom - rc.top, run_on_gpu))
             return 1;
     }
 
@@ -248,6 +251,11 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam)
         PostQuitMessage(0);
         break;
 
+    case WM_LBUTTONDBLCLK:
+    {
+        volatile int a = 0;
+        break;
+    }
     case WM_INPUT:
     case WM_MOUSEMOVE:
     case WM_LBUTTONDOWN:
