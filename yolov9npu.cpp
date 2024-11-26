@@ -729,13 +729,18 @@ bool Sample::CopySharedVideoTextureTensor(std::vector<std::byte> & inputBuffer, 
 
         if (desc.Width != inputWidth || desc.Height != inputHeight)
         {
+            D2D1_FACTORY_OPTIONS options = {};
             if (m_d2d1_factory.Get() == nullptr)
             {
                 // Create a Direct2D factory.
+                ComPtr<ID2D1Factory> pFactory;
                 HRESULT hr = D2D1CreateFactory(
-                    D2D1_FACTORY_TYPE_MULTI_THREADED,
-                    m_d2d1_factory.GetAddressOf());
-
+                    D2D1_FACTORY_TYPE::D2D1_FACTORY_TYPE_MULTI_THREADED,
+                    __uuidof(ID2D1Factory),
+                    &options,
+                    (void**)&pFactory); //  m_d2d1_factory.GetAddressOf());
+             
+                hr = pFactory.As(&m_d2d1_factory);
                 // Create D2Device 
                 auto device = m_deviceResources->GetD3DDevice();
                 ComPtr<IDXGIDevice3> dxgiDevice;
@@ -1833,9 +1838,21 @@ bool Sample::Initialize(HWND window, int width, int height, bool run_on_gpu)
     // Add the DML execution provider to ORT using the DML Device and D3D12 Command Queue created above.
     if (!m_dmlDevice)
     {
-        MessageBox(0, L"No NPU device found\n", L"Error", MB_OK);
+        MessageBox(0, L"No NPU device found, using GPU", L"Error", MB_OK);
+
+        m_run_on_gpu = true;
+        InitializeDirectML(
+            m_d3dDevice.GetAddressOf(),
+            m_commandQueue.GetAddressOf(),
+            m_dmlDevice.GetAddressOf(),
+            m_commandAllocator.GetAddressOf(),
+            m_commandList.GetAddressOf());
+      
+    }
+    if (!m_dmlDevice)
+    {
+        MessageBox(0, L"No ML device found", L"Error", MB_OK);
         ExitProcess(1);
-        return false;
     }
 
 

@@ -416,8 +416,8 @@ private:
     std::chrono::duration<double, std::milli>        m_inference_duration;
     std::chrono::duration<double, std::milli>        m_output_duration;
     
-    Microsoft::WRL::ComPtr<ID2D1Factory8>           m_d2d1_factory;
-    Microsoft::WRL::ComPtr<ID2D1Device7>            m_d2d1_device;
+    Microsoft::WRL::ComPtr<ID2D1Factory7>           m_d2d1_factory;
+    Microsoft::WRL::ComPtr<ID2D1Device6>            m_d2d1_device;
     Microsoft::WRL::ComPtr<ID2D1DeviceContext>      m_d2dContext;
 
     std::unique_ptr<DirectX::SpriteBatch>           m_sprite; // output tensor image

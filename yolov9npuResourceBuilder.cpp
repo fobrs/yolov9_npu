@@ -50,7 +50,7 @@ void Sample::GetNonGraphicsAdapter(IDXCoreAdapterList* adapterList, IDXCoreAdapt
         {
             if (m_run_on_gpu)
             {
-                if (adapterName.find("GPU") != std::string::npos || adapterName.find("gpu") != std::string::npos)
+                if (possibleAdapter->IsAttributeSupported(DXCORE_ADAPTER_ATTRIBUTE_D3D12_GRAPHICS))
                 {
                     m_device_name = L"GPU";
 
